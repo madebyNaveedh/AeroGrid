@@ -106,53 +106,46 @@ class CoppeliaZMQBridge:
         if not self.sim:
             return
 
-        # Candidate names for Quadcopter target dummy
-        target_candidates = [
-            "/Quadcopter/target",
-            "/Quadcopter_target",
-            "/target",
-            ":target",
-            "Quadcopter_target",
+        # 1. Search for Quadcopter body handle
+        quad_candidates = [
+            "/Quadcopter",
+            "/Quadcopter[0]",
+            ":Quadcopter",
+            "Quadcopter",
+            "/Quadricopter",
         ]
-
-        for cand in target_candidates:
+        for cand in quad_candidates:
             try:
-                handle = self.sim.getObject(cand)
-                if handle != -1:
-                    self.target_handle = handle
-                    pos = self.sim.getObjectPosition(self.target_handle, -1)
-                    self.current_target_pos = pos
-                    logger.info("[CoppeliaZMQ] Found target dummy '%s' at handle %d (pos: %s)", cand, handle, pos)
+                handle = self.sim.getObject(cand, {"noError": True})
+                if handle and handle != -1:
+                    self.quadcopter_handle = handle
+                    logger.info("[CoppeliaZMQ] Located Quadcopter body '%s' (Handle: %d)", cand, handle)
                     break
             except Exception:
                 continue
 
-        # If Quadcopter not found in scene, attempt to auto-load default model
-        if self.quadcopter_handle == -1:
-            model_candidates = [
-                "/home/mohammed/CoppeliaSim/models/robots/mobile/Quadcopter.ttm",
-                os.path.expanduser("~/CoppeliaSim/models/robots/mobile/Quadcopter.ttm"),
-            ]
-            for m_path in model_candidates:
-                if os.path.exists(m_path):
-                    try:
-                        loaded_handle = self.sim.loadModel(m_path)
-                        if loaded_handle != -1:
-                            self.quadcopter_handle = loaded_handle
-                            logger.info("[CoppeliaZMQ] Auto-loaded Quadcopter model from: %s", m_path)
-                            # Re-check target handle
-                            for cand in target_candidates:
-                                try:
-                                    th = self.sim.getObject(cand)
-                                    if th != -1:
-                                        self.target_handle = th
-                                        self.current_target_pos = self.sim.getObjectPosition(self.target_handle, -1)
-                                        break
-                                except Exception:
-                                    continue
-                            break
-                    except Exception as e:
-                        logger.debug("[CoppeliaZMQ] Could not auto-load model: %s", e)
+        # 2. Search for target dummy handle
+        target_candidates = [
+            "/Quadcopter/target",
+            "/Quadcopter[0]/target",
+            "/Quadcopter_target",
+            "/target",
+            ":target",
+            "Quadcopter_target",
+            "target",
+        ]
+        for cand in target_candidates:
+            try:
+                handle = self.sim.getObject(cand, {"noError": True})
+                if handle and handle != -1:
+                    self.target_handle = handle
+                    pos = self.sim.getObjectPosition(self.target_handle, -1)
+                    self.current_target_pos = list(pos)
+                    self.goal_target_pos = list(pos)
+                    logger.info("[CoppeliaZMQ] Located target dummy '%s' (Handle: %d, Pos: %s)", cand, handle, pos)
+                    break
+            except Exception:
+                continue
 
     def start_simulation(self) -> bool:
         """Start or resume CoppeliaSim simulation."""
@@ -266,7 +259,8 @@ class CoppeliaZMQBridge:
         # Case 1: Tier 1 Manned Right-of-Way Emergency Evacuation
         if "EMERGENCY_DESCENT" in action or "EVACUATION" in action:
             new_z = 0.05  # Ground landing level
-            self.set_target_altitude(new_z)
+            # Land directly down at current lateral position
+            self.set_target_position(self.goal_target_pos[0], self.goal_target_pos[1], new_z)
             result.update({
                 "target_z": new_z,
                 "description": "EMERGENCY EVACUATION: Target lowered to ground (0.05m). Clearing airspace for HEMS.",
@@ -276,9 +270,8 @@ class CoppeliaZMQBridge:
 
         # Case 2: Tier 2 Urban Canyon 5G Shadowing / C2 Handover
         elif "DESCEND_30M" in action or "5G_CELL_HANDOVER" in action:
-            current_z = self.current_target_pos[2]
-            new_z = max(0.2, current_z - 0.5)  # Drop by 0.5m in sim scale
-            self.set_target_altitude(new_z)
+            new_z = 1.50  # Lower altitude envelope to regain 5G gNodeB LOS
+            self.set_target_position(0.0, 0.0, new_z)
             result.update({
                 "target_z": new_z,
                 "description": f"5G HANDOVER: Lowering flight altitude by 0.5m to {new_z:.2f}m for gNodeB line-of-sight.",
@@ -297,13 +290,14 @@ class CoppeliaZMQBridge:
             })
             logger.info("[CoppeliaZMQ] >>> ACTUATING: VERTIPORT DIVERT (Pos: -2.0, 1.5, 0.8) <<<")
 
-        # Case 4: Nominal Corridor Cruise
+        # Case 4: Nominal Corridor Cruise (Reset to center at 2.0m)
         else:
-            self.set_target_altitude(2.0)
+            self.set_target_position(0.0, 0.0, 2.0)
             result.update({
                 "target_z": 2.0,
-                "description": "NOMINAL CRUISE: Maintaining assigned BVLOS corridor altitude at 2.0m.",
+                "description": "NOMINAL CRUISE: Maintaining assigned BVLOS corridor center at 2.0m (X:0, Y:0).",
                 "actuated": True,
             })
+            logger.info("[CoppeliaZMQ] >>> ACTUATING: NOMINAL CRUISE (Pos: 0.0, 0.0, 2.0) <<<")
 
         return result
