@@ -1,0 +1,598 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AeroGrid UTM - Multi-Agent Airspace Coordination Control</title>
+    <style>
+        :root {
+            --bg-primary: #0a0e17;
+            --bg-card: #111827;
+            --bg-accent: #1f293d;
+            --border: #2d3748;
+            --text-primary: #f7fafc;
+            --text-secondary: #a0aec0;
+            --accent-cyan: #00f2fe;
+            --accent-blue: #4facfe;
+            --aviation-color: #f56565;
+            --telecom-color: #4299e1;
+            --fleet-color: #ecc94b;
+            --coord-color: #48bb78;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, sans-serif;
+        }
+
+        body {
+            background-color: var(--bg-primary);
+            color: var(--text-primary);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding-bottom: 20px;
+            border-bottom: 1px solid var(--border);
+            margin-bottom: 20px;
+        }
+
+        .title-group h1 {
+            font-size: 26px;
+            font-weight: 700;
+            background: linear-gradient(135deg, var(--accent-cyan), var(--accent-blue));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .badge-itu {
+            background: rgba(79, 172, 254, 0.15);
+            border: 1px solid var(--accent-blue);
+            color: var(--accent-cyan);
+            font-size: 11px;
+            padding: 4px 8px;
+            border-radius: 4px;
+            text-transform: uppercase;
+            font-weight: 600;
+        }
+
+        .scenario-selector {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+
+        .scenario-btn {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            color: var(--text-secondary);
+            padding: 8px 14px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 13px;
+            font-weight: 600;
+            transition: all 0.2s ease;
+        }
+
+        .scenario-btn:hover {
+            border-color: var(--accent-cyan);
+            color: var(--text-primary);
+        }
+
+        .scenario-btn.active {
+            background: rgba(0, 242, 254, 0.15);
+            border-color: var(--accent-cyan);
+            color: var(--accent-cyan);
+        }
+
+        .grid-container {
+            display: grid;
+            grid-template-columns: 1fr 380px;
+            gap: 20px;
+        }
+
+        .radar-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 16px;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 14px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--text-secondary);
+        }
+
+        #radarCanvas {
+            width: 100%;
+            height: 380px;
+            background: #060911;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+        }
+
+        .telemetry-row {
+            display: grid;
+            grid-template-columns: repeat(5, 1fr);
+            gap: 10px;
+        }
+
+        .telem-box {
+            background: var(--bg-accent);
+            padding: 10px;
+            border-radius: 6px;
+            text-align: center;
+            border-left: 3px solid var(--accent-blue);
+        }
+
+        .telem-label {
+            font-size: 10px;
+            text-transform: uppercase;
+            color: var(--text-secondary);
+            margin-bottom: 4px;
+        }
+
+        .telem-value {
+            font-size: 18px;
+            font-weight: 700;
+            color: var(--accent-cyan);
+            font-family: monospace;
+        }
+
+        .agents-column {
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+
+        .agent-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 14px;
+            position: relative;
+        }
+
+        .agent-card.aviation { border-top: 3px solid var(--aviation-color); }
+        .agent-card.telecom { border-top: 3px solid var(--telecom-color); }
+        .agent-card.fleet { border-top: 3px solid var(--fleet-color); }
+
+        .agent-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+
+        .agent-name {
+            font-size: 13px;
+            font-weight: 700;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .confidence-pill {
+            background: rgba(255, 255, 255, 0.08);
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-family: monospace;
+        }
+
+        .agent-action {
+            font-size: 13px;
+            font-weight: 700;
+            margin-bottom: 6px;
+            color: #fff;
+            background: rgba(0,0,0,0.3);
+            padding: 6px 8px;
+            border-radius: 4px;
+            font-family: monospace;
+        }
+
+        .agent-justification {
+            font-size: 11px;
+            color: var(--text-secondary);
+            line-height: 1.4;
+            margin-bottom: 8px;
+        }
+
+        .citation-tag {
+            font-size: 10px;
+            background: rgba(0, 242, 254, 0.1);
+            color: var(--accent-cyan);
+            padding: 2px 6px;
+            border-radius: 3px;
+            display: inline-block;
+            margin-right: 4px;
+            margin-top: 4px;
+        }
+
+        .coordination-banner {
+            grid-column: span 2;
+            background: linear-gradient(135deg, rgba(72, 187, 120, 0.15), rgba(79, 172, 254, 0.1));
+            border: 1px solid var(--coord-color);
+            border-radius: 8px;
+            padding: 16px 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-top: 20px;
+        }
+
+        .coord-action-box h2 {
+            font-size: 12px;
+            color: var(--coord-color);
+            text-transform: uppercase;
+            font-weight: 700;
+            margin-bottom: 4px;
+        }
+
+        .coord-action {
+            font-size: 20px;
+            font-weight: 800;
+            color: #fff;
+            font-family: monospace;
+        }
+
+        .coord-details {
+            font-size: 12px;
+            color: var(--text-secondary);
+            max-width: 600px;
+            line-height: 1.4;
+        }
+
+        .overruled-box {
+            background: rgba(245, 101, 101, 0.1);
+            border: 1px solid rgba(245, 101, 101, 0.3);
+            padding: 6px 10px;
+            border-radius: 4px;
+            font-size: 11px;
+            color: #feb2b2;
+            margin-top: 6px;
+        }
+
+        .audit-footer {
+            grid-column: span 2;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 12px 16px;
+            margin-top: 20px;
+            font-family: monospace;
+            font-size: 11px;
+            color: var(--text-secondary);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .wal-status {
+            color: var(--coord-color);
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .wal-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--coord-color);
+            animation: pulse 1.5s infinite;
+        }
+        @keyframes pulse {
+            0% { opacity: 0.4; }
+            50% { opacity: 1; }
+            100% { opacity: 0.4; }
+        }
+    </style>
+</head>
+<body>
+
+    <header>
+        <div class="title-group">
+            <h1>AEROGRID UTM</h1>
+            <span class="badge-itu">ITU AI for Good Hackathon</span>
+        </div>
+        <div class="scenario-selector">
+            <span style="font-size: 12px; color: var(--text-secondary);">SCENARIOS:</span>
+            <button class="scenario-btn active" onclick="loadScenario(1)">1: HEMS Emergency</button>
+            <button class="scenario-btn" onclick="loadScenario(2)">2: Urban 5G Shadow</button>
+            <button class="scenario-btn" onclick="loadScenario(3)">3: Battery Divert</button>
+        </div>
+    </header>
+
+    <div class="grid-container">
+        <!-- Airspace Radar & Telemetry -->
+        <div class="radar-card">
+            <div class="card-header">
+                <span>Tactical Airspace Map (Dubai Corridor DXB-BVLOS)</span>
+                <span id="targetDroneBadge" style="color: var(--accent-cyan); font-family: monospace;">UAS_CARGO_DXB_104</span>
+            </div>
+            <canvas id="radarCanvas"></canvas>
+            
+            <div class="telemetry-row">
+                <div class="telem-box">
+                    <div class="telem-label">Altitude</div>
+                    <div class="telem-value" id="altVal">120m</div>
+                </div>
+                <div class="telem-box">
+                    <div class="telem-label">Ground Speed</div>
+                    <div class="telem-value" id="speedVal">22.5 m/s</div>
+                </div>
+                <div class="telem-box">
+                    <div class="telem-label">Battery SoC</div>
+                    <div class="telem-value" id="socVal">21.5%</div>
+                </div>
+                <div class="telem-box">
+                    <div class="telem-label">C2 RTT Latency</div>
+                    <div class="telem-value" id="rttVal">42 ms</div>
+                </div>
+                <div class="telem-box">
+                    <div class="telem-label">Packet Loss</div>
+                    <div class="telem-value" id="lossVal">0.10%</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Three Domain Agents -->
+        <div class="agents-column">
+            <!-- Aviation Agent -->
+            <div class="agent-card aviation">
+                <div class="agent-header">
+                    <div class="agent-name" style="color: var(--aviation-color);">
+                        <span>Aviation Safety Agent</span>
+                    </div>
+                    <span class="confidence-pill" id="avConf">Conf: 0.98</span>
+                </div>
+                <div class="agent-action" id="avAction">EMERGENCY_DESCENT_AND_CORRIDOR_EVACUATION</div>
+                <div class="agent-justification" id="avJust">
+                    Immediate right-of-way yielding required for manned medical helicopter (HEMS) detected at 820m.
+                </div>
+                <div id="avCitations">
+                    <span class="citation-tag">UAE Law 26 Art. 14</span>
+                    <span class="citation-tag">GCAA CAR.UAS.405</span>
+                </div>
+            </div>
+
+            <!-- Telecom Agent -->
+            <div class="agent-card telecom">
+                <div class="agent-header">
+                    <div class="agent-name" style="color: var(--telecom-color);">
+                        <span>Telecom C2 Agent</span>
+                    </div>
+                    <span class="confidence-pill" id="tcConf">Conf: 0.92</span>
+                </div>
+                <div class="agent-action" id="tcAction">MAINTAIN_C2_COMMUNICATIONS_PROFILE</div>
+                <div class="agent-justification" id="tcJust">
+                    C2 aeronautical spectrum parameters nominal (RTT=42ms, Loss=0.1%). Operating within TDRA QoS bounds.
+                </div>
+                <div id="tcCitations">
+                    <span class="citation-tag">TDRA 5030-5091 MHz</span>
+                </div>
+            </div>
+
+            <!-- Fleet Agent -->
+            <div class="agent-card fleet">
+                <div class="agent-header">
+                    <div class="agent-name" style="color: var(--fleet-color);">
+                        <span>Fleet Operations Agent</span>
+                    </div>
+                    <span class="confidence-pill" id="flConf">Conf: 0.88</span>
+                </div>
+                <div class="agent-action" id="flAction">THROTTLE_BACK_TO_MAX_ENDURANCE_SPEED_AVOID_EXTRA_MANEUVERS</div>
+                <div class="agent-justification" id="flJust">
+                    Battery at 21.5% approaching 20% reserve threshold. Recommend straight-in cruise to preserve energy.
+                </div>
+                <div id="flCitations">
+                    <span class="citation-tag">AeroGrid Fleet SOP 4.2</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Coordination Engine Resolution Banner -->
+        <div class="coordination-banner">
+            <div class="coord-action-box">
+                <h2>Coordination Engine Arbitration Verdict</h2>
+                <div class="coord-action" id="coordAction">EMERGENCY_DESCENT_AND_CORRIDOR_EVACUATION</div>
+                <div class="coord-details" id="coordJust">
+                    Tier 1 Airspace Safety Priority Enforced pursuant to ASTM F3411 and UAE Federal Decree-Law No. 26 Art. 14. Mid-air deconfliction and manned right-of-way strictly override fleet energy preservation preferences.
+                </div>
+                <div class="overruled-box" id="coordOverruled">
+                    Overruled: [fleet_ops_agent] 'THROTTLE_BACK_TO_MAX_ENDURANCE_SPEED_AVOID_EXTRA_MANEUVERS' — Subordinated to life-safety separation minima.
+                </div>
+            </div>
+            <div style="text-align: right;">
+                <div style="font-size: 11px; color: var(--text-secondary); margin-bottom: 4px;">ROS 2 TOPIC PUBLISHED</div>
+                <div style="font-size: 13px; font-weight: 700; color: var(--accent-cyan); font-family: monospace;">/aerogrid/utm_commands</div>
+                <div style="font-size: 11px; color: var(--coord-color); margin-top: 6px;">Status: CONFLICT RESOLVED (Tier 1)</div>
+            </div>
+        </div>
+
+        <!-- Footer Audit Status -->
+        <div class="audit-footer">
+            <div class="wal-status">
+                <div class="wal-dot"></div>
+                <span>SQLite WAL Audit Engine: PRAGMA journal_mode=WAL | Cryptographic Provenance Active</span>
+            </div>
+            <div id="auditEventId">Audit Event ID: evt_f8de8509874447cb9ef4002c47dd968d</div>
+        </div>
+    </div>
+
+    <script>
+        const scenarios = {
+            1: {
+                drone: "UAS_CARGO_DXB_104",
+                alt: "120m", speed: "22.5 m/s", soc: "21.5%", rtt: "42 ms", loss: "0.10%",
+                av: { action: "EMERGENCY_DESCENT_AND_CORRIDOR_EVACUATION", conf: "Conf: 0.98", just: "Immediate right-of-way yielding required for manned medical helicopter (HEMS) detected at 820m closing in.", citations: ["UAE Law 26 Art. 14", "GCAA CAR.UAS.405"] },
+                tc: { action: "MAINTAIN_C2_COMMUNICATIONS_PROFILE", conf: "Conf: 0.92", just: "C2 aeronautical spectrum parameters nominal (RTT=42ms, Loss=0.1%). Operating within TDRA QoS bounds.", citations: ["TDRA 5030-5091 MHz"] },
+                fl: { action: "THROTTLE_BACK_TO_MAX_ENDURANCE_SPEED_AVOID_EXTRA_MANEUVERS", conf: "Conf: 0.88", just: "Battery at 21.5% approaching 20% reserve threshold. Recommend straight-in cruise to conserve power.", citations: ["AeroGrid Fleet SOP 4.2"] },
+                coord: { action: "EMERGENCY_DESCENT_AND_CORRIDOR_EVACUATION", just: "Tier 1 Airspace Safety Priority Enforced pursuant to ASTM F3411 and UAE Federal Decree-Law No. 26 Art. 14. Mid-air deconfliction and manned right-of-way strictly override fleet energy preservation preferences.", overruled: "Overruled: [fleet_ops_agent] 'THROTTLE_BACK_TO_MAX_ENDURANCE_SPEED_AVOID_EXTRA_MANEUVERS' — Subordinated to life-safety separation minima." },
+                intruder: { x: 340, y: 160, label: "HEMS Air Ambulance (Manned)", color: "#f56565" }
+            },
+            2: {
+                drone: "UAS_DELIVERY_AUH_209",
+                alt: "90m", speed: "18.0 m/s", soc: "58.0%", rtt: "295 ms", loss: "3.80%",
+                av: { action: "MAINTAIN_ASSIGNED_AIRSPACE_CORRIDOR", conf: "Conf: 0.88", just: "Airspace traffic clear. Nearest UAS at 4500m conforms to standard separation minima.", citations: ["GCAA CAR.UAS.405"] },
+                tc: { action: "DESCEND_30M_AND_INITIATE_5G_CELL_HANDOVER", conf: "Conf: 0.90", just: "C2 link QoS degraded above 100ms threshold (RTT=295ms, Loss=3.8%). 3GPP TS 22.125 advises lower altitude for gNodeB LoS.", citations: ["3GPP TS 22.125", "TDRA UAS C2"] },
+                fl: { action: "CONTINUE_PLANNED_ECONOMIC_FLIGHT_PLAN", conf: "Conf: 0.90", just: "Fleet delivery schedule nominal (Battery=58%). Current high cruise altitude optimal for energy.", citations: ["AeroGrid Fleet SOP 5.1"] },
+                coord: { action: "DESCEND_30M_AND_INITIATE_5G_CELL_HANDOVER", just: "Tier 2 C2 Link Integrity Priority Enforced. Aviation is nominal, but Telecom detected safety-critical C2 latency spike. Lowering altitude to restore link overrides commercial cruise efficiency.", overruled: "Overruled: [fleet_ops_agent] 'CONTINUE_PLANNED_ECONOMIC_FLIGHT_PLAN' — UAS cannot fly autonomous trajectory without compliant C2 link." },
+                intruder: null
+            },
+            3: {
+                drone: "UAS_MED_SHJ_311",
+                alt: "105m", speed: "20.0 m/s", soc: "16.2%", rtt: "38 ms", loss: "0.05%",
+                av: { action: "MAINTAIN_ASSIGNED_AIRSPACE_CORRIDOR", conf: "Conf: 0.88", just: "Airspace clear. No traffic hazards detected in active sector.", citations: ["GCAA CAR.UAS.405"] },
+                tc: { action: "MAINTAIN_C2_COMMUNICATIONS_PROFILE", conf: "Conf: 0.92", just: "C2 metrics fully nominal (RTT=38ms, Loss=0.05%).", citations: ["TDRA 5030-5091 MHz"] },
+                fl: { action: "EMERGENCY_DIVERT_TO_NEAREST_VERTIPORT", conf: "Conf: 0.96", just: "Battery State of Charge is critically depleted at 16.2%, breaching 20% diversion reserve. Mandatory diversion to alternate landing pad.", citations: ["AeroGrid Fleet SOP 4.2", "ISO 23629"] },
+                coord: { action: "EMERGENCY_DIVERT_TO_NEAREST_VERTIPORT", just: "Tier 3 Energy Safety Directive Approved. Airspace and C2 link are confirmed nominal. Emergency diversion approved pursuant to AeroGrid Fleet SOP Sec 4.2.", overruled: "Consensus: Airspace corridor cleared for diversion vector." },
+                intruder: null
+            }
+        };
+
+        let currentScenario = 1;
+
+        function loadScenario(num) {
+            currentScenario = num;
+            document.querySelectorAll('.scenario-btn').forEach((btn, idx) => {
+                btn.classList.toggle('active', idx + 1 === num);
+            });
+
+            const data = scenarios[num];
+            document.getElementById('targetDroneBadge').innerText = data.drone;
+            document.getElementById('altVal').innerText = data.alt;
+            document.getElementById('speedVal').innerText = data.speed;
+            document.getElementById('socVal').innerText = data.soc;
+            document.getElementById('rttVal').innerText = data.rtt;
+            document.getElementById('lossVal').innerText = data.loss;
+
+            document.getElementById('avAction').innerText = data.av.action;
+            document.getElementById('avConf').innerText = data.av.conf;
+            document.getElementById('avJust').innerText = data.av.just;
+
+            document.getElementById('tcAction').innerText = data.tc.action;
+            document.getElementById('tcConf').innerText = data.tc.conf;
+            document.getElementById('tcJust').innerText = data.tc.just;
+
+            document.getElementById('flAction').innerText = data.fl.action;
+            document.getElementById('flConf').innerText = data.fl.conf;
+            document.getElementById('flJust').innerText = data.fl.just;
+
+            document.getElementById('coordAction').innerText = data.coord.action;
+            document.getElementById('coordJust').innerText = data.coord.just;
+            document.getElementById('coordOverruled').innerText = data.coord.overruled;
+
+            renderRadar();
+        }
+
+        // Radar Canvas Rendering
+        const canvas = document.getElementById('radarCanvas');
+        const ctx = canvas.getContext('2d');
+
+        function resizeCanvas() {
+            canvas.width = canvas.parentElement.clientWidth - 32;
+            canvas.height = 360;
+        }
+        window.addEventListener('resize', () => { resizeCanvas(); renderRadar(); });
+        resizeCanvas();
+
+        let sweepAngle = 0;
+
+        function renderRadar() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            const cx = canvas.width / 2;
+            const cy = canvas.height / 2;
+
+            // Concentric radar circles
+            ctx.strokeStyle = "rgba(45, 55, 72, 0.6)";
+            ctx.lineWidth = 1;
+            [60, 110, 160].forEach(r => {
+                ctx.beginPath();
+                ctx.arc(cx, cy, r, 0, Math.PI * 2);
+                ctx.stroke();
+            });
+
+            // Grid crosshairs
+            ctx.beginPath();
+            ctx.moveTo(cx, 10); ctx.lineTo(cx, canvas.height - 10);
+            ctx.moveTo(10, cy); ctx.lineTo(canvas.width - 10, cy);
+            ctx.stroke();
+
+            // Geofence NFZ Buffer
+            ctx.strokeStyle = "rgba(245, 101, 101, 0.4)";
+            ctx.setLineDash([4, 4]);
+            ctx.strokeRect(cx + 80, cy - 140, 100, 90);
+            ctx.fillStyle = "rgba(245, 101, 101, 0.08)";
+            ctx.fillRect(cx + 80, cy - 140, 100, 90);
+            ctx.setLineDash([]);
+            ctx.fillStyle = "#f56565";
+            ctx.font = "10px monospace";
+            ctx.fillText("NFZ BUFFER (500m)", cx + 85, cy - 125);
+
+            // Vertiports
+            ctx.fillStyle = "#48bb78";
+            ctx.beginPath(); ctx.arc(cx - 120, cy + 90, 6, 0, Math.PI * 2); ctx.fill();
+            ctx.fillText("Vertiport Pad 1", cx - 110, cy + 94);
+
+            // Target Drone (Center)
+            ctx.fillStyle = "#00f2fe";
+            ctx.beginPath(); ctx.arc(cx, cy, 7, 0, Math.PI * 2); ctx.fill();
+            ctx.strokeStyle = "rgba(0, 242, 254, 0.5)";
+            ctx.lineWidth = 2;
+            ctx.beginPath(); ctx.arc(cx, cy, 14, 0, Math.PI * 2); ctx.stroke();
+            ctx.fillText("UAS (Our Flight)", cx + 18, cy + 4);
+
+            // Intruder if Scenario 1
+            const sc = scenarios[currentScenario];
+            if (sc.intruder) {
+                const ix = cx + (sc.intruder.x - 300);
+                const iy = cy + (sc.intruder.y - 200);
+                ctx.fillStyle = sc.intruder.color;
+                ctx.beginPath(); ctx.arc(ix, iy, 7, 0, Math.PI * 2); ctx.fill();
+                ctx.fillText(sc.intruder.label + " [820m]", ix + 12, iy + 4);
+
+                // Distance vector line
+                ctx.strokeStyle = "rgba(245, 101, 101, 0.6)";
+                ctx.setLineDash([3, 3]);
+                ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(ix, iy); ctx.stroke();
+                ctx.setLineDash([]);
+            }
+
+            // Radar sweep line
+            sweepAngle += 0.02;
+            const sx = cx + Math.cos(sweepAngle) * 160;
+            const sy = cy + Math.sin(sweepAngle) * 160;
+            const gradient = ctx.createLinearGradient(cx, cy, sx, sy);
+            gradient.addColorStop(0, "rgba(0, 242, 254, 0.3)");
+            gradient.addColorStop(1, "rgba(0, 242, 254, 0)");
+            ctx.strokeStyle = gradient;
+            ctx.lineWidth = 2;
+            ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(sx, sy); ctx.stroke();
+
+            requestAnimationFrame(renderRadar);
+        }
+
+        renderRadar();
+    </script>
+</body>
+</html>
+

@@ -1,0 +1,40 @@
+# AeroGrid - Multi-Agent UTM Prototype Dependencies
+# ==============================================================================
+
+# Data Validation & Typed Settings
+pydantic>=2.6.0
+pydantic-settings>=2.2.0
+
+# Cyber-Physical Digital Twin & ZeroMQ Remote API
+pyzmq>=25.1.0
+cbor2>=5.6.0
+PyQt5>=5.15.6
+
+# Operational REST & WebSocket API
+fastapi>=0.110.0
+uvicorn>=0.28.0
+
+# Environment & Configuration
+python-dotenv>=1.0.0
+
+# Data Analytics & Audit Parquet Persistence
+pandas>=2.1.0
+pyarrow>=14.0.0
+
+# LLM Client Libraries (Industry Standard Providers)
+openai>=1.20.0
+google-genai>=0.1.1
+
+# Phase 3: Knowledge Base Vectorization & RAG (ITU AI Readiness Stack)
+langchain>=0.2.0
+langchain-community>=0.2.0
+langchain-text-splitters>=0.2.0
+langchain-chroma>=0.1.0
+langchain-huggingface>=0.0.3
+chromadb>=0.5.0
+sentence-transformers>=2.6.0
+pypdf>=4.1.0
+
+# Development & Testing
+pytest>=8.0.0
+pytest-asyncio>=0.23.0

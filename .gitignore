@@ -1,0 +1,70 @@
+# ==============================================================================
+# AeroGrid - Git Ignore Rules
+# ==============================================================================
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.dylib
+*.dll
+
+# Virtual Environments & Packages
+.venv/
+env/
+venv/
+ENV/
+build/
+install/
+log/
+pyzmq.libs/
+zmq/
+cbor/
+cbor2/
+*.dist-info/
+coppeliasim_zmqremoteapi_client/
+AeroGrid/backend/coppeliasim_zmqremoteapi_client/
+*.egg-info/
+
+# Databases & Analytics
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+*.parquet
+backend/audit/*.db
+backend/audit/*.db-wal
+backend/audit/*.db-shm
+backend/audit/*.parquet
+AeroGrid/backend/audit/*.db
+AeroGrid/backend/audit/*.db-wal
+AeroGrid/backend/audit/*.db-shm
+AeroGrid/backend/audit/*.parquet
+
+# Vector Stores
+vector_db/
+AeroGrid/backend/knowledge_base/vector_db/
+chroma.sqlite3
+
+# Environment Variables & Secrets
+.env
+.env.local
+*.pem
+*.key
+
+# Binary Models & Tarballs
+*.tar.xz
+*.tar.gz
+*.zip
+*.bin
+AeroGrid/coppeliasim/Quadcopter.ttm
+
+# IDE & OS Files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
