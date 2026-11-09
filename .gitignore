@@ -15,6 +15,7 @@ __pycache__/
 env/
 venv/
 ENV/
+py_packages/
 build/
 install/
 log/

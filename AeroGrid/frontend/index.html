@@ -315,9 +315,10 @@
         </div>
         <div class="scenario-selector">
             <span style="font-size: 12px; color: var(--text-secondary);">SCENARIOS:</span>
-            <button class="scenario-btn active" onclick="loadScenario(1)">1: HEMS Emergency</button>
-            <button class="scenario-btn" onclick="loadScenario(2)">2: Urban 5G Shadow</button>
-            <button class="scenario-btn" onclick="loadScenario(3)">3: Battery Divert</button>
+            <button class="scenario-btn active" id="btnScen0" onclick="loadScenario(0)">0: Nominal Cruise</button>
+            <button class="scenario-btn" id="btnScen1" onclick="loadScenario(1)">1: HEMS Emergency</button>
+            <button class="scenario-btn" id="btnScen2" onclick="loadScenario(2)">2: Urban 5G Shadow</button>
+            <button class="scenario-btn" id="btnScen3" onclick="loadScenario(3)">3: Battery Divert</button>
         </div>
     </header>
 
@@ -440,6 +441,15 @@
 
     <script>
         const scenarios = {
+            0: {
+                drone: "UAS_CARGO_DXB_104",
+                alt: "120m", speed: "22.5 m/s", soc: "82.0%", rtt: "35 ms", loss: "0.05%",
+                av: { action: "MAINTAIN_ASSIGNED_AIRSPACE_CORRIDOR", conf: "Conf: 0.95", just: "BVLOS Dubai Sky Dome corridor clear. Nominal tactical separation maintained.", citations: ["UAE Law 26 Art. 14", "GCAA CAR.UAS.405"] },
+                tc: { action: "MAINTAIN_C2_COMMUNICATIONS_PROFILE", conf: "Conf: 0.95", just: "C2 aeronautical spectrum parameters nominal (RTT=35ms, Loss=0.05%). Within TDRA bounds.", citations: ["TDRA 5030-5091 MHz"] },
+                fl: { action: "CONTINUE_PLANNED_ECONOMIC_FLIGHT_PLAN", conf: "Conf: 0.92", just: "Battery SoC healthy at 82%. Cruise speed optimal for corridor transit schedule.", citations: ["AeroGrid Fleet SOP 4.2"] },
+                coord: { action: "MAINTAIN_ASSIGNED_AIRSPACE_CORRIDOR", just: "All operational domains nominal. Consensus reached across Aviation, Telecom, and Fleet agents.", overruled: "Consensus: No agent recommendations overruled." },
+                intruder: null
+            },
             1: {
                 drone: "UAS_CARGO_DXB_104",
                 alt: "120m", speed: "22.5 m/s", soc: "21.5%", rtt: "42 ms", loss: "0.10%",
@@ -469,40 +479,102 @@
             }
         };
 
-        let currentScenario = 1;
+        let currentScenario = 0;
+        let droneSimZ = 2.0;
 
-        function loadScenario(num) {
+        function renderCitations(containerId, citations) {
+            const container = document.getElementById(containerId);
+            if (!container) return;
+            container.innerHTML = "";
+            (citations || []).forEach(c => {
+                const tag = document.createElement("span");
+                tag.className = "citation-tag";
+                tag.innerText = c;
+                container.appendChild(tag);
+            });
+        }
+
+        async function loadScenario(num) {
             currentScenario = num;
             document.querySelectorAll('.scenario-btn').forEach((btn, idx) => {
-                btn.classList.toggle('active', idx + 1 === num);
+                btn.classList.toggle('active', idx === num);
             });
 
-            const data = scenarios[num];
-            document.getElementById('targetDroneBadge').innerText = data.drone;
-            document.getElementById('altVal').innerText = data.alt;
-            document.getElementById('speedVal').innerText = data.speed;
-            document.getElementById('socVal').innerText = data.soc;
-            document.getElementById('rttVal').innerText = data.rtt;
-            document.getElementById('lossVal').innerText = data.loss;
+            // Fallback local update immediately for instantaneous UI response
+            const localData = scenarios[num];
+            if (localData) {
+                applyUIData(localData);
+            }
 
-            document.getElementById('avAction').innerText = data.av.action;
-            document.getElementById('avConf').innerText = data.av.conf;
-            document.getElementById('avJust').innerText = data.av.just;
-
-            document.getElementById('tcAction').innerText = data.tc.action;
-            document.getElementById('tcConf').innerText = data.tc.conf;
-            document.getElementById('tcJust').innerText = data.tc.just;
-
-            document.getElementById('flAction').innerText = data.fl.action;
-            document.getElementById('flConf').innerText = data.fl.conf;
-            document.getElementById('flJust').innerText = data.fl.just;
-
-            document.getElementById('coordAction').innerText = data.coord.action;
-            document.getElementById('coordJust').innerText = data.coord.just;
-            document.getElementById('coordOverruled').innerText = data.coord.overruled;
+            // Trigger Live Multi-Agent Deliberation & ZeroMQ Actuation on Python Backend
+            try {
+                const resp = await fetch(`/api/scenario/${num}`, { method: 'POST' });
+                if (resp.ok) {
+                    const data = await resp.json();
+                    applyUIData(data);
+                }
+            } catch (err) {
+                console.log("Local standalone mode active (backend server offline or disconnected).");
+            }
 
             renderRadar();
         }
+
+        function applyUIData(data) {
+            if (!data) return;
+            if (data.drone) document.getElementById('targetDroneBadge').innerText = data.drone;
+            if (data.alt) document.getElementById('altVal').innerText = data.alt;
+            if (data.speed) document.getElementById('speedVal').innerText = data.speed;
+            if (data.soc) document.getElementById('socVal').innerText = data.soc;
+            if (data.rtt) document.getElementById('rttVal').innerText = data.rtt;
+            if (data.loss) document.getElementById('lossVal').innerText = data.loss;
+
+            if (data.av) {
+                document.getElementById('avAction').innerText = data.av.action || "";
+                document.getElementById('avConf').innerText = data.av.conf || "Conf: 0.95";
+                document.getElementById('avJust').innerText = data.av.just || "";
+                renderCitations('avCitations', data.av.citations);
+            }
+
+            if (data.tc) {
+                document.getElementById('tcAction').innerText = data.tc.action || "";
+                document.getElementById('tcConf').innerText = data.tc.conf || "Conf: 0.92";
+                document.getElementById('tcJust').innerText = data.tc.just || "";
+                renderCitations('tcCitations', data.tc.citations);
+            }
+
+            if (data.fl) {
+                document.getElementById('flAction').innerText = data.fl.action || "";
+                document.getElementById('flConf').innerText = data.fl.conf || "Conf: 0.88";
+                document.getElementById('flJust').innerText = data.fl.just || "";
+                renderCitations('flCitations', data.fl.citations);
+            }
+
+            if (data.coord) {
+                document.getElementById('coordAction').innerText = data.coord.action || "";
+                document.getElementById('coordJust').innerText = data.coord.just || "";
+                document.getElementById('coordOverruled').innerText = data.coord.overruled || "Consensus Reached.";
+                if (data.coord.audit_event_id) {
+                    document.getElementById('auditEventId').innerText = `Audit Event ID: ${data.coord.audit_event_id}`;
+                }
+            }
+        }
+
+        // Live Telemetry Poller (CoppeliaSim ZeroMQ position sync)
+        setInterval(async () => {
+            try {
+                const resp = await fetch('/api/telemetry');
+                if (resp.ok) {
+                    const telem = await resp.json();
+                    if (telem.position && telem.position.z !== undefined) {
+                        droneSimZ = telem.position.z;
+                    }
+                    if (telem.audit_event_id && telem.audit_event_id !== "evt_init") {
+                        document.getElementById('auditEventId').innerText = `Audit Event ID: ${telem.audit_event_id}`;
+                    }
+                }
+            } catch (e) {}
+        }, 200);
 
         // Radar Canvas Rendering
         const canvas = document.getElementById('radarCanvas');
@@ -559,11 +631,11 @@
             ctx.strokeStyle = "rgba(0, 242, 254, 0.5)";
             ctx.lineWidth = 2;
             ctx.beginPath(); ctx.arc(cx, cy, 14, 0, Math.PI * 2); ctx.stroke();
-            ctx.fillText("UAS (Our Flight)", cx + 18, cy + 4);
+            ctx.fillText(`UAS (Our Flight) [${droneSimZ.toFixed(2)}m]`, cx + 18, cy + 4);
 
             // Intruder if Scenario 1
             const sc = scenarios[currentScenario];
-            if (sc.intruder) {
+            if (sc && sc.intruder) {
                 const ix = cx + (sc.intruder.x - 300);
                 const iy = cy + (sc.intruder.y - 200);
                 ctx.fillStyle = sc.intruder.color;
@@ -591,6 +663,8 @@
             requestAnimationFrame(renderRadar);
         }
 
+        // Initialize on Scenario 0 (Nominal Cruise)
+        loadScenario(0);
         renderRadar();
     </script>
 </body>

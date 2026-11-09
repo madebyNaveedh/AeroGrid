@@ -6,7 +6,18 @@
 [![CoppeliaSim](https://img.shields.io/badge/CoppeliaSim-4.7%2B-blueviolet.svg)](https://www.coppeliarobotics.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-**AeroGrid** is a modular, multi-agent Unmanned Traffic Management (UTM) prototype engineered for the **ITU AI for Good Hackathon**. It coordinates autonomous drone operations across high-density urban airspaces and Beyond Visual Line of Sight (BVLOS) corridors through regulatory-grounded multi-agent reasoning, statutory conflict arbitration, a ZeroMQ cyber-physical digital twin in CoppeliaSim, and a high-performance native PyQt5 Tactical Mission Control HUD.
+**AeroGrid** is a modular, multi-agent Unmanned Traffic Management (UTM) decision-support system and cyber-physical digital twin engineered for the **ITU AI for Good Sandbox Hackathon: United Arab Emirates** (hosted by ITU with UAE leadership, based on the **Dubai Sky Dome** initiative).
+
+---
+
+## 🏆 ITU AI for Good Hackathon Deliverables
+
+| Deliverable | Description | File / Access Link |
+| :--- | :--- | :--- |
+| **1. Technical Report** | Official 5-page submission document structured according to the ITU-T Y.3172 pipeline node mapping (SRC, C, PP, M, P, D, SINK), progressive error scenario (T0–T5), liability controversy, and 6 policy gaps (G1–G6). | [📄 AeroGrid_Technical_Report.pdf](AeroGrid/docs/AeroGrid_Technical_Report.pdf)<br>[📝 AeroGrid_Technical_Report.md](AeroGrid/docs/AeroGrid_Technical_Report.md) |
+| **2. Knowledge Base** | Persisted ChromaDB vector database adapting [`CrashingGuru/ITUAIReadiness`](https://github.com/CrashingGuru/ITUAIReadiness) with `sentence-transformers/all-MiniLM-L6-v2` embeddings over 11 official UAE & ITU policy documents. Includes interactive CLI search utility. | [📚 KNOWLEDGE_BASE.md](AeroGrid/docs/KNOWLEDGE_BASE.md)<br>`python3 AeroGrid/backend/knowledge_base/query_kb.py` |
+| **3. GitHub Repository** | Public open-source repository containing complete multi-agent backend, ROS 2 Humble bridge, digital twin ZeroMQ bridge, unit tests, and Mission Control HUD. | [🌐 github.com/madebyNaveedh/AeroGrid](https://github.com/madebyNaveedh/AeroGrid) *(Exclusively @madebyNaveedh)* |
+| **4. Demo Video Script** | Comprehensive 7-minute presentation guide and second-by-second storyboard for shortlisted demonstration review. | [🎬 DEMO_VIDEO_SCRIPT.md](AeroGrid/docs/DEMO_VIDEO_SCRIPT.md) |
 
 ---
 

@@ -49,6 +49,8 @@ class PolicyRetriever:
 
     def _init_chroma(self, persist_dir: str, collection_name: str) -> None:
         """Attempt to bind Chroma vector database."""
+        import os
+        os.environ.setdefault("HF_HUB_OFFLINE", "1")
         try:
             from langchain_huggingface import HuggingFaceEmbeddings
         except ImportError:

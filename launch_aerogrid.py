@@ -101,6 +101,20 @@ def check_and_start_coppelia(auto_start_sim: bool = False):
             logger.warning("Could not auto-launch CoppeliaSim: %s. You can start it manually via ./coppeliaSim.sh", e)
 
 
+def start_web_server_thread(port: int = 8080):
+    """Start the AeroGrid Web HUD server in a background daemon thread."""
+    def _server_worker():
+        try:
+            from backend.server import run_server
+            run_server(port=port)
+        except Exception as e:
+            logger.debug("Web server error: %s", e)
+
+    t = threading.Thread(target=_server_worker, daemon=True)
+    t.start()
+    logger.info("Web Mission Control HUD accessible at: http://localhost:%d", port)
+
+
 def start_ros2_publisher_thread():
     """Start the ROS 2 UTM command publisher in a background daemon thread."""
     def _ros2_worker():
@@ -135,11 +149,14 @@ def main():
     # 1. Check or start CoppeliaSim
     check_and_start_coppelia(auto_start_sim=args.coppelia)
 
-    # 2. Start ROS 2 Publisher
+    # 2. Start Web Mission Control HUD Server
+    start_web_server_thread(port=8080)
+
+    # 3. Start ROS 2 Publisher
     if not args.no_ros:
         start_ros2_publisher_thread()
 
-    # 3. Launch PyQt5 Tactical Mission Control Dashboard
+    # 4. Launch PyQt5 Tactical Mission Control Dashboard
     logger.info("Launching Native PyQt5 Tactical Mission Control Dashboard...")
     from PyQt5.QtWidgets import QApplication
     from AeroGrid.frontend.gui_dashboard import AeroGridTacticalHUD

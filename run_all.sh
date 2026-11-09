@@ -28,8 +28,9 @@ fi
 
 # 2. Run automated validation test suite
 echo ""
-echo "[2/4] Running automated system verification suite (12 tests)..."
-PYTHONPATH="$SCRIPT_DIR/AeroGrid:$SCRIPT_DIR" python3 -m unittest discover -s "$SCRIPT_DIR/AeroGrid/tests" -v
+echo "[2/4] Running automated system verification suite (13 tests)..."
+export HF_HUB_OFFLINE=1
+PYTHONPATH="$SCRIPT_DIR/py_packages:$SCRIPT_DIR/AeroGrid:$SCRIPT_DIR" python3 -m unittest discover -s "$SCRIPT_DIR/AeroGrid/tests" -v
 
 # 3. Run multi-agent conflict simulation pipeline
 echo ""

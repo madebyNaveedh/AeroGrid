@@ -1,16 +1,10 @@
 #!/usr/bin/env python3
-"""AeroGrid UTM - Tactical Mission Control Cockpit (Glass HUD).
+"""AeroGrid UTM - Tactical Mission Control Glass Cockpit HUD (Phase 4).
 
-Sleek, minimalist, high-impact aerospace dashboard designed for rapid situational
-awareness and live demonstration during the ITU AI for Good Hackathon.
-
-Features:
-- Glass Cockpit Tactical Airspace Radar (Dubai BVLOS Corridor)
-- High-contrast Avionics Telemetry Meters (Altitude, Speed, Battery, C2 QoS)
-- 4 Primary Interactive Scenario Decks (Nominal, HEMS, 5G Shadow, Battery Divert)
-- Clean Visual Agent Decision Cards (Aviation, Telecom, Fleet) with Priority Badges
-- Executive Statutory Arbitration Verdict Banner
-- Real-Time Mission Event Ticker (Clean audit stream)
+High-contrast aerospace Glass Cockpit HUD matching the exact design
+of the AeroGrid web console. Directly connects Python multi-agent deliberation
+with CoppeliaSim ZeroMQ actuation (port 23000), SQLite WAL auditing, and
+ROS 2 Humble topic publishing.
 """
 
 from __future__ import annotations
@@ -19,7 +13,9 @@ import math
 import os
 import sys
 import time
-from typing import Any, Dict, Optional
+from typing import Dict, List, Optional
+
+os.environ.setdefault("HF_HUB_OFFLINE", "1")
 
 from PyQt5.QtCore import QPointF, QRectF, Qt, QTimer
 from PyQt5.QtGui import (
@@ -36,6 +32,7 @@ from PyQt5.QtGui import (
 from PyQt5.QtWidgets import (
     QApplication,
     QFrame,
+    QGraphicsDropShadowEffect,
     QHBoxLayout,
     QLabel,
     QMainWindow,
@@ -47,10 +44,12 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-# Project paths
-WORKSPACE_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-if WORKSPACE_ROOT not in sys.path:
-    sys.path.insert(0, WORKSPACE_ROOT)
+# Workspace and backend imports
+WORKSPACE_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+PROJECT_ROOT = os.path.dirname(WORKSPACE_ROOT)
+for p in [PROJECT_ROOT, WORKSPACE_ROOT, os.path.join(PROJECT_ROOT, "py_packages")]:
+    if os.path.exists(p) and p not in sys.path:
+        sys.path.insert(0, p)
 
 from backend.audit.logger import AuditEngine
 from backend.knowledge_base.retrieval import PolicyRetriever
@@ -62,35 +61,34 @@ from backend.simulation.coppelia_zmq_bridge import CoppeliaZMQBridge
 
 
 # ==============================================================================
-# Glass Cockpit Tactical Radar Widget
+# Tactical Airspace Radar Map (Glass Cockpit)
 # ==============================================================================
 class GlassCockpitRadar(QWidget):
-    """High-contrast, minimalist Tactical Airspace Radar display."""
+    """30 FPS Tactical Airspace Radar matching the AeroGrid HUD aesthetic."""
 
-    def __init__(self, parent: Optional[QWidget] = None):
+    def __init__(self, parent=None):
         super().__init__(parent)
-        self.setMinimumSize(460, 440)
+        self.setMinimumSize(420, 340)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
-        self.sweep_angle: float = 0.0
-        self.active_scenario: int = 0
+        self.sweep_angle = 0.0
+        self.active_scenario = 0
         self.drone_pos = {"x": 0.0, "y": 0.0, "z": 2.0}
 
-        # 30 FPS sweep timer
-        self.timer = QTimer(self)
-        self.timer.timeout.connect(self._tick)
-        self.timer.start(33)
-
-    def _tick(self):
-        self.sweep_angle = (self.sweep_angle + 2.5) % 360.0
-        self.update()
+        self.anim_timer = QTimer(self)
+        self.anim_timer.timeout.connect(self._tick)
+        self.anim_timer.start(33)  # ~30 FPS
 
     def set_scenario(self, scenario_idx: int):
         self.active_scenario = scenario_idx
         self.update()
 
-    def update_drone_telemetry(self, x: float, y: float, z: float):
-        self.drone_pos = {"x": x, "y": y, "z": z}
+    def update_drone_pos(self, pos: dict):
+        self.drone_pos = pos
+        self.update()
+
+    def _tick(self):
+        self.sweep_angle = (self.sweep_angle + 2.5) % 360.0
         self.update()
 
     def paintEvent(self, event):
@@ -99,144 +97,138 @@ class GlassCockpitRadar(QWidget):
 
         w, h = self.width(), self.height()
         cx, cy = w / 2.0, h / 2.0
-        radius = min(cx, cy) - 24.0
+        radius = min(cx, cy) - 20.0
 
-        # Deep aerospace backdrop
-        p.fillRect(0, 0, w, h, QColor("#080c14"))
-
-        # Outer Radar Ring with Subtle Cyan Glow
-        p.setPen(QPen(QColor("#00f3ff"), 1.8))
-        p.setBrush(QBrush(QColor("#0a111e")))
-        p.drawEllipse(QPointF(cx, cy), radius, radius)
+        # Radar Backdrop
+        p.fillRect(0, 0, w, h, QColor("#060911"))
 
         # Concentric Distance Rings
-        ring_pen = QPen(QColor(0, 243, 255, 40), 1, Qt.DashLine)
+        ring_pen = QPen(QColor("#2d3748"), 1)
         p.setPen(ring_pen)
         p.setBrush(Qt.NoBrush)
 
-        rings = [(0.25, "250m"), (0.50, "500m"), (0.75, "750m"), (1.0, "1000m")]
+        rings = [(0.35, "250m"), (0.65, "500m"), (0.95, "1000m")]
         p.setFont(QFont("Monospace", 8))
         for frac, label in rings:
             r = radius * frac
             p.drawEllipse(QPointF(cx, cy), r, r)
-            p.setPen(QPen(QColor(0, 243, 255, 80)))
+            p.setPen(QPen(QColor(160, 174, 192, 120)))
             p.drawText(int(cx + 6), int(cy - r + 12), label)
             p.setPen(ring_pen)
 
         # Crosshairs
-        p.setPen(QPen(QColor(0, 243, 255, 30), 1))
+        p.setPen(QPen(QColor("#2d3748"), 1))
         p.drawLine(int(cx - radius), int(cy), int(cx + radius), int(cy))
         p.drawLine(int(cx), int(cy - radius), int(cx), int(cy + radius))
 
+        # Geofence NFZ Buffer Box (Upper Right)
+        nfz_w, nfz_h = 100, 75
+        nfz_x, nfz_y = cx + 60, cy - 110
+        nfz_pen = QPen(QColor(245, 101, 101, 140), 1, Qt.DashLine)
+        p.setPen(nfz_pen)
+        p.setBrush(QBrush(QColor(245, 101, 101, 20)))
+        p.drawRect(int(nfz_x), int(nfz_y), nfz_w, nfz_h)
+        p.setFont(QFont("Monospace", 7, QFont.Bold))
+        p.setPen(QPen(QColor("#f56565")))
+        p.drawText(int(nfz_x + 6), int(nfz_y + 14), "NFZ BUFFER (500m)")
+
+        # Vertiport Pad 1 (Lower Left)
+        vp_x, vp_y = cx - 110, cy + 75
+        p.setPen(Qt.NoPen)
+        p.setBrush(QBrush(QColor("#48bb78")))
+        p.drawEllipse(QPointF(vp_x, vp_y), 5, 5)
+        p.setFont(QFont("Sans-Serif", 8, QFont.Bold))
+        p.setPen(QPen(QColor("#48bb78")))
+        p.drawText(int(vp_x + 10), int(vp_y + 4), "Vertiport Pad 1")
+
+        # Scenario 1: HEMS Air Ambulance Incursion
+        if self.active_scenario == 1:
+            hx = cx + 80
+            hy = cy - 70
+            # Red Intruder Marker
+            p.setPen(Qt.NoPen)
+            p.setBrush(QBrush(QColor("#f56565")))
+            p.drawEllipse(QPointF(hx, hy), 6, 6)
+            # Distance Vector Line to Drone
+            dash_red = QPen(QColor(245, 101, 101, 150), 1.2, Qt.DashLine)
+            p.setPen(dash_red)
+            p.drawLine(QPointF(cx, cy), QPointF(hx, hy))
+            # Label
+            p.setFont(QFont("Sans-Serif", 8, QFont.Bold))
+            p.setPen(QPen(QColor("#f56565")))
+            p.drawText(int(hx + 10), int(hy + 4), "HEMS Air Ambulance (Manned) [820m]")
+
+        # Scenario 2: 5G Shadow Zone
+        elif self.active_scenario == 2:
+            sh_x, sh_y = cx + 40, cy - 40
+            p.setPen(QPen(QColor("#4299e1"), 1, Qt.DashLine))
+            p.setBrush(QBrush(QColor(66, 153, 225, 25)))
+            p.drawRect(int(sh_x), int(sh_y), 80, 80)
+            p.setFont(QFont("Monospace", 7))
+            p.setPen(QPen(QColor("#4299e1")))
+            p.drawText(int(sh_x + 6), int(sh_y + 14), "5G CELL SHADOW")
+
+        # Center Drone Marker: UAS (Our Flight)
+        dx, dy = cx, cy
+        p.setPen(Qt.NoPen)
+        p.setBrush(QBrush(QColor("#00f2fe")))
+        p.drawEllipse(QPointF(dx, dy), 5, 5)
+
+        p.setPen(QPen(QColor(0, 242, 254, 120), 1.8))
+        p.setBrush(Qt.NoBrush)
+        p.drawEllipse(QPointF(dx, dy), 12, 12)
+
+        p.setFont(QFont("Sans-Serif", 8, QFont.Bold))
+        p.setPen(QPen(QColor("#00f2fe")))
+        p.drawText(int(dx + 16), int(dy + 4), f"UAS (Our Flight) [{self.drone_pos.get('z', 2.0):.2f}m]")
+
         # Radar Sweep Beam
         rad = math.radians(self.sweep_angle)
-        bx = cx + radius * math.cos(rad)
-        by = cy + radius * math.sin(rad)
+        sx = cx + radius * math.cos(rad)
+        sy = cy + radius * math.sin(rad)
+        p.setPen(QPen(QColor(0, 242, 254, 180), 1.5))
+        p.drawLine(QPointF(cx, cy), QPointF(sx, sy))
 
-        p.setPen(QPen(QColor(0, 243, 255, 190), 2))
-        p.drawLine(QPointF(cx, cy), QPointF(bx, by))
-
-        # Sweep sector cone
-        cone = QPainterPath()
-        cone.moveTo(cx, cy)
-        cone.arcTo(QRectF(cx - radius, cy - radius, radius * 2, radius * 2), -self.sweep_angle, 35)
-        cone.closeSubpath()
-        grad = QRadialGradient(cx, cy, radius)
-        grad.setColorAt(0, QColor(0, 243, 255, 45))
-        grad.setColorAt(1, QColor(0, 243, 255, 0))
-        p.setBrush(QBrush(grad))
-        p.setPen(Qt.NoPen)
-        p.drawPath(cone)
-
-        # ----------------------------------------------------------------------
-        # Tactical Map Objects
-        # ----------------------------------------------------------------------
-        # 1. Vertiport Pad 1 (Always Visible in Safe Sector)
-        vp_x = cx - radius * 0.65
-        vp_y = cy + radius * 0.45
-        p.setPen(QPen(QColor("#30d158"), 2))
-        p.setBrush(QBrush(QColor(48, 209, 88, 50)))
-        p.drawEllipse(QPointF(vp_x, vp_y), 9, 9)
-        p.setFont(QFont("Sans-Serif", 8, QFont.Bold))
-        p.setPen(QPen(QColor("#30d158")))
-        p.drawText(int(vp_x + 14), int(vp_y + 4), "Vertiport Pad 1")
-
-        # 2. Scenario 1: HEMS Manned Medical Helicopter Incursion
-        if self.active_scenario == 1:
-            hx = cx + radius * 0.60
-            hy = cy - radius * 0.50
-            # Warning Pulse
-            flash = int(180 + 75 * math.sin(time.time() * 9))
-            p.setPen(QPen(QColor(255, 69, 58, flash), 2))
-            p.setBrush(QBrush(QColor(255, 69, 58, 60)))
-            p.drawEllipse(QPointF(hx, hy), 12, 12)
-            p.setBrush(QBrush(QColor("#ff453a")))
-            p.drawEllipse(QPointF(hx, hy), 5, 5)
-            p.setFont(QFont("Sans-Serif", 8, QFont.Bold))
-            p.setPen(QPen(QColor("#ff453a")))
-            p.drawText(int(hx + 16), int(hy + 4), "🚨 HEMS INTRUDER (820m)")
-
-        # 3. Scenario 2: 5G Signal Shadow Zone
-        elif self.active_scenario == 2:
-            sx = cx - radius * 0.15
-            sy = cy - radius * 0.40
-            p.setPen(QPen(QColor(0, 243, 255, 180), 1.5, Qt.DashDotLine))
-            p.setBrush(QBrush(QColor(0, 243, 255, 25)))
-            p.drawEllipse(QPointF(sx, sy), 48, 48)
-            p.setFont(QFont("Sans-Serif", 8, QFont.Bold))
-            p.setPen(QPen(QColor("#00f3ff")))
-            p.drawText(int(sx - 40), int(sy), "📶 5G SHADOW CELL")
-
-        # 4. Our UAS Flight (Drone)
-        # Scaled coordinates
-        dx = cx + (self.drone_pos["x"] * (radius / 3.0))
-        dy = cy - (self.drone_pos["y"] * (radius / 3.0))
-        p.setPen(QPen(QColor(0, 243, 255, 120), 2))
-        p.setBrush(QBrush(QColor(0, 243, 255, 45)))
-        p.drawEllipse(QPointF(dx, dy), 10, 10)
-        p.setBrush(QBrush(QColor("#ffffff")))
-        p.drawEllipse(QPointF(dx, dy), 4, 4)
-
-        # Drone Label & Altitude Tag
-        p.setFont(QFont("Monospace", 9, QFont.Bold))
-        p.setPen(QPen(QColor("#00f3ff")))
-        p.drawText(int(dx + 15), int(dy + 4), f"UAS-104 [{self.drone_pos['z']:.2f}m]")
+        p.end()
 
 
 # ==============================================================================
-# Modern Glass Mission Control HUD
+# Glass Cockpit Mission Control HUD Window
 # ==============================================================================
 class AeroGridTacticalHUD(QMainWindow):
-    """Clean, intuitive Glass Mission Control Cockpit for AeroGrid UTM."""
+    """Turnkey Mission Control HUD matching the AeroGrid web console."""
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("AeroGrid UTM - Tactical Mission Control [ITU AI for Good]")
-        self.resize(1300, 840)
-        self.setMinimumSize(1080, 700)
+        self.setWindowTitle("AeroGrid UTM - Multi-Agent Airspace Coordination Control")
+        self.resize(1280, 780)
+        self.setMinimumSize(1080, 680)
 
-        # Initialize Backend
-        self.audit_engine = AuditEngine(db_path=os.path.join(WORKSPACE_ROOT, "backend/audit/aerogrid_audit.db"))
-        self.retriever = PolicyRetriever(chroma_persist_dir=os.path.join(WORKSPACE_ROOT, "backend/knowledge_base/vector_db"))
+        # Initialize Backend Services
+        db_path = os.path.join(WORKSPACE_ROOT, "backend/audit/aerogrid_audit.db")
+        vector_db = os.path.join(WORKSPACE_ROOT, "backend/knowledge_base/vector_db")
+
+        self.audit_engine = AuditEngine(db_path=db_path)
+        self.retriever = PolicyRetriever(chroma_persist_dir=vector_db)
         self.aviation_agent = AviationAgent(llm_client=None, retriever=self.retriever)
         self.telecom_agent = TelecomAgent(llm_client=None, retriever=self.retriever)
         self.fleet_agent = FleetAgent(llm_client=None, retriever=self.retriever)
-        self.coordination_engine = CoordinationEngine(audit_engine=self.audit_engine)
+        self.coordination_engine = CoordinationEngine(audit_engine=self.audit_engine, retriever=self.retriever)
 
-        # ZeroMQ Bridge
+        # ZeroMQ CoppeliaSim Bridge
         self.zmq_bridge = CoppeliaZMQBridge()
         self.zmq_bridge.connect()
 
         self.current_scenario_idx = 0
         self._build_ui()
-        self._apply_glass_theme()
+        self._apply_theme()
 
-        # Telemetry poll loop (10 Hz)
+        # Telemetry Poller (10 Hz)
         self.poll_timer = QTimer(self)
         self.poll_timer.timeout.connect(self._poll_telemetry)
         self.poll_timer.start(100)
 
-        # Boot into Nominal Cruise (Hover 2.0m)
+        # Startup in Nominal Cruise (Scenario 0)
         self.run_scenario(0)
 
     def _build_ui(self):
@@ -247,559 +239,547 @@ class AeroGridTacticalHUD(QMainWindow):
         root.setSpacing(12)
 
         # ----------------------------------------------------------------------
-        # Top Deck: App Identity + 4 Primary Scenario Control Cards
+        # Top Header: Title + Scenario Selector Buttons
         # ----------------------------------------------------------------------
-        top_bar = QHBoxLayout()
-        top_bar.setSpacing(10)
+        header = QHBoxLayout()
+        header.setContentsMargins(0, 0, 0, 4)
 
-        brand_box = QVBoxLayout()
-        brand_box.setSpacing(1)
-        b_title = QLabel("AEROGRID")
-        b_title.setObjectName("brandTitle")
-        b_sub = QLabel("AUTONOMOUS UTM MISSION CONTROL • ITU AI FOR GOOD")
-        b_sub.setObjectName("brandSubtitle")
-        brand_box.addWidget(b_title)
-        brand_box.addWidget(b_sub)
-        top_bar.addLayout(brand_box)
+        title_box = QVBoxLayout()
+        title_box.setSpacing(2)
+        h1 = QLabel("AEROGRID UTM")
+        h1.setObjectName("mainTitle")
+        sub_badge = QLabel("ITU AI FOR GOOD HACKATHON")
+        sub_badge.setObjectName("badgeItu")
+        title_box.addWidget(h1)
+        title_box.addWidget(sub_badge)
+        header.addLayout(title_box)
 
-        top_bar.addSpacing(20)
+        header.addStretch()
 
-        # 4 Interactive Scenario Cards
-        self.btn_scen0 = self._create_scenario_btn("0: NOMINAL CRUISE", "Safe BVLOS Corridor (2.0m)", "#30d158", 0)
-        self.btn_scen1 = self._create_scenario_btn("1: HEMS EMERGENCY", "Manned Aircraft Right-of-Way", "#ff453a", 1)
-        self.btn_scen2 = self._create_scenario_btn("2: 5G SHADOWING", "Urban Canyon C2 Handover", "#00f3ff", 2)
-        self.btn_scen3 = self._create_scenario_btn("3: LOW BATTERY", "Critical Vertiport Divert", "#ff9f0a", 3)
+        # Scenario Buttons
+        scen_box = QHBoxLayout()
+        scen_box.setSpacing(8)
+        scen_lbl = QLabel("SCENARIOS:")
+        scen_lbl.setStyleSheet("font-size: 11px; font-weight: 700; color: #a0aec0;")
+        scen_box.addWidget(scen_lbl)
 
-        top_bar.addWidget(self.btn_scen0)
-        top_bar.addWidget(self.btn_scen1)
-        top_bar.addWidget(self.btn_scen2)
-        top_bar.addWidget(self.btn_scen3)
+        self.btn_scen0 = self._create_scenario_btn("0: Nominal Cruise", 0)
+        self.btn_scen1 = self._create_scenario_btn("1: HEMS Emergency", 1)
+        self.btn_scen2 = self._create_scenario_btn("2: Urban 5G Shadow", 2)
+        self.btn_scen3 = self._create_scenario_btn("3: Battery Divert", 3)
 
-        root.addLayout(top_bar)
+        scen_box.addWidget(self.btn_scen0)
+        scen_box.addWidget(self.btn_scen1)
+        scen_box.addWidget(self.btn_scen2)
+        scen_box.addWidget(self.btn_scen3)
+        header.addLayout(scen_box)
 
-        # ----------------------------------------------------------------------
-        # Avionics Telemetry HUD Bar (5 Clean Digital Gauges)
-        # ----------------------------------------------------------------------
-        telem_row = QHBoxLayout()
-        telem_row.setSpacing(10)
-
-        self.gauge_alt = self._create_avionics_gauge("ALTITUDE", "2.00 m", "#00f3ff", "Sim Target Altitude")
-        self.gauge_speed = self._create_avionics_gauge("GROUND SPEED", "20.0 m/s", "#ffffff", "Corridor Velocity")
-        self.gauge_battery = self._create_avionics_gauge("BATTERY SOC", "82%", "#30d158", "LiPo Energy Reserve")
-        self.gauge_c2 = self._create_avionics_gauge("C2 LATENCY", "32 ms", "#30d158", "TDRA 5GHz Link QoS")
-        self.gauge_cop = self._create_avionics_gauge("COPPELIASIM", "CONNECTED", "#30d158", "ZeroMQ Port 23000")
-
-        telem_row.addWidget(self.gauge_alt)
-        telem_row.addWidget(self.gauge_speed)
-        telem_row.addWidget(self.gauge_battery)
-        telem_row.addWidget(self.gauge_c2)
-        telem_row.addWidget(self.gauge_cop)
-
-        root.addLayout(telem_row)
+        root.addLayout(header)
 
         # ----------------------------------------------------------------------
-        # Center Body: Tactical Radar (Left) + 3 Clean Domain Cards (Right)
+        # Main Grid Container (Left: Radar Card + Telemetry | Right: Agents Column)
         # ----------------------------------------------------------------------
-        body_split = QSplitter(Qt.Horizontal)
-        body_split.setHandleWidth(8)
+        grid = QHBoxLayout()
+        grid.setSpacing(14)
 
-        # Left: Tactical Radar
-        radar_container = QFrame()
-        radar_container.setObjectName("radarContainer")
-        rc_layout = QVBoxLayout(radar_container)
-        rc_layout.setContentsMargins(10, 10, 10, 10)
+        # LEFT: Radar Card
+        radar_card = QFrame()
+        radar_card.setObjectName("radarCard")
+        rc_layout = QVBoxLayout(radar_card)
+        rc_layout.setContentsMargins(12, 10, 12, 10)
+        rc_layout.setSpacing(8)
+
+        rc_head = QHBoxLayout()
+        rc_title = QLabel("Tactical Airspace Map (Dubai Corridor DXB-BVLOS)")
+        rc_title.setObjectName("cardHeaderLabel")
+        self.target_drone_badge = QLabel("UAS_CARGO_DXB_104")
+        self.target_drone_badge.setObjectName("droneBadge")
+        rc_head.addWidget(rc_title)
+        rc_head.addStretch()
+        rc_head.addWidget(self.target_drone_badge)
+        rc_layout.addLayout(rc_head)
+
         self.radar = GlassCockpitRadar()
-        rc_layout.addWidget(self.radar)
-        body_split.addWidget(radar_container)
+        rc_layout.addWidget(self.radar, stretch=1)
 
-        # Right: Clean Multi-Agent Status Deck
-        deck_box = QWidget()
-        deck_layout = QVBoxLayout(deck_box)
-        deck_layout.setContentsMargins(0, 0, 0, 0)
-        deck_layout.setSpacing(10)
+        # Telemetry Row (5 horizontal boxes)
+        telem_row = QHBoxLayout()
+        telem_row.setSpacing(8)
+        self.t_alt = self._create_telem_box("ALTITUDE", "120m")
+        self.t_speed = self._create_telem_box("GROUND SPEED", "22.5 m/s")
+        self.t_soc = self._create_telem_box("BATTERY SOC", "82.0%")
+        self.t_rtt = self._create_telem_box("C2 RTT LATENCY", "35 ms")
+        self.t_loss = self._create_telem_box("PACKET LOSS", "0.05%")
 
-        # 3 Visual Agent Cards
-        self.card_aviation = self._create_domain_card(
-            agent_name="AVIATION SAFETY AGENT",
-            tier_badge="TIER 1 (AIRSPACE SAFETY)",
-            action_text="MAINTAIN CORRIDOR",
-            status_text="NOMINAL",
-            law_tag="UAE Law 26 • GCAA CAR Part IV",
-            theme_color="#30d158",
+        telem_row.addWidget(self.t_alt)
+        telem_row.addWidget(self.t_speed)
+        telem_row.addWidget(self.t_soc)
+        telem_row.addWidget(self.t_rtt)
+        telem_row.addWidget(self.t_loss)
+        rc_layout.addLayout(telem_row)
+
+        grid.addWidget(radar_card, stretch=6)
+
+        # RIGHT: Agents Column (380px fixed width style)
+        agents_col = QVBoxLayout()
+        agents_col.setSpacing(10)
+
+        self.card_av = self._create_agent_card(
+            agent_title="Aviation Safety Agent",
+            theme_color="#f56565",
+            conf_text="Conf: 0.98",
+            action_text="EMERGENCY_DESCENT_AND_CORRIDOR_EVACUATION",
+            just_text="Immediate right-of-way yielding required for manned medical helicopter (HEMS) detected at 820m.",
+            citations=["UAE Law 26 Art. 14", "GCAA CAR.UAS.405"],
         )
-        self.card_telecom = self._create_domain_card(
-            agent_name="TELECOM C2 AGENT",
-            tier_badge="TIER 2 (SPECTRUM QoS)",
-            action_text="MAINTAIN C2 PROFILE",
-            status_text="NOMINAL",
-            law_tag="TDRA 5030-5091 MHz • ICAO Annex 10",
-            theme_color="#30d158",
+        self.card_tc = self._create_agent_card(
+            agent_title="Telecom C2 Agent",
+            theme_color="#4299e1",
+            conf_text="Conf: 0.92",
+            action_text="MAINTAIN_C2_COMMUNICATIONS_PROFILE",
+            just_text="C2 aeronautical spectrum parameters nominal (RTT=42ms, Loss=0.1%). Operating within TDRA QoS bounds.",
+            citations=["TDRA 5030-5091 MHz"],
         )
-        self.card_fleet = self._create_domain_card(
-            agent_name="FLEET LOGISTICS AGENT",
-            tier_badge="TIER 3 (COMMERCIAL SLA)",
-            action_text="CONTINUE FLIGHT PLAN",
-            status_text="NOMINAL",
-            law_tag="AeroGrid Fleet SOP Sec 4.2",
-            theme_color="#30d158",
+        self.card_fl = self._create_agent_card(
+            agent_title="Fleet Operations Agent",
+            theme_color="#ecc94b",
+            conf_text="Conf: 0.88",
+            action_text="THROTTLE_BACK_TO_MAX_ENDURANCE_SPEED_AVOID_EXTRA_MANEUVERS",
+            just_text="Battery at 21.5% approaching 20% reserve threshold. Recommend straight-in cruise to conserve power.",
+            citations=["AeroGrid Fleet SOP 4.2"],
         )
 
-        deck_layout.addWidget(self.card_aviation)
-        deck_layout.addWidget(self.card_telecom)
-        deck_layout.addWidget(self.card_fleet)
+        agents_col.addWidget(self.card_av)
+        agents_col.addWidget(self.card_tc)
+        agents_col.addWidget(self.card_fl)
 
-        body_split.addWidget(deck_box)
-        body_split.setStretchFactor(0, 6)
-        body_split.setStretchFactor(1, 5)
-
-        root.addWidget(body_split, stretch=5)
+        grid.addLayout(agents_col, stretch=4)
+        root.addLayout(grid, stretch=6)
 
         # ----------------------------------------------------------------------
-        # Executive Arbitration Verdict Banner
+        # Coordination Engine Arbitration Verdict Banner
         # ----------------------------------------------------------------------
-        self.verdict_frame = QFrame()
-        self.verdict_frame.setObjectName("verdictFrame")
-        vf_layout = QHBoxLayout(self.verdict_frame)
-        vf_layout.setContentsMargins(16, 12, 16, 12)
-        vf_layout.setSpacing(14)
+        self.coord_banner = QFrame()
+        self.coord_banner.setObjectName("coordBanner")
+        cb_layout = QHBoxLayout(self.coord_banner)
+        cb_layout.setContentsMargins(14, 10, 14, 10)
+        cb_layout.setSpacing(12)
 
-        v_left = QVBoxLayout()
-        v_left.setSpacing(2)
-        self.v_badge = QLabel("STATUTORY ARBITRATION VERDICT")
-        self.v_badge.setObjectName("vBadge")
-        self.v_action = QLabel("MAINTAIN_ASSIGNED_AIRSPACE_CORRIDOR")
-        self.v_action.setObjectName("vAction")
-        v_left.addWidget(self.v_badge)
-        v_left.addWidget(self.v_action)
-        vf_layout.addLayout(v_left, stretch=4)
+        cb_left = QVBoxLayout()
+        cb_left.setSpacing(3)
+        cb_title = QLabel("Coordination Engine Arbitration Verdict")
+        cb_title.setObjectName("cbTitle")
+        self.coord_action_lbl = QLabel("EMERGENCY_DESCENT_AND_CORRIDOR_EVACUATION")
+        self.coord_action_lbl.setObjectName("coordAction")
+        self.coord_just_lbl = QLabel("Tier 1 Airspace Safety Priority Enforced pursuant to ASTM F3411 and UAE Federal Decree-Law No. 26 Art. 14.")
+        self.coord_just_lbl.setObjectName("coordJust")
+        self.coord_just_lbl.setWordWrap(True)
+        self.coord_overruled_lbl = QLabel("Overruled: [fleet_ops_agent] 'THROTTLE_BACK_TO_MAX_ENDURANCE_SPEED_AVOID_EXTRA_MANEUVERS' — Subordinated to life-safety separation minima.")
+        self.coord_overruled_lbl.setObjectName("coordOverruled")
+        self.coord_overruled_lbl.setWordWrap(True)
 
-        v_right = QVBoxLayout()
-        v_right.setSpacing(2)
-        self.v_summary = QLabel("All airspace safety, spectrum, and battery telemetry are nominal. Continuing BVLOS corridor cruise.")
-        self.v_summary.setObjectName("vSummary")
-        self.v_summary.setWordWrap(True)
-        self.v_overruled = QLabel("Consensus Reached: No agent recommendations overruled.")
-        self.v_overruled.setObjectName("vOverruled")
-        v_right.addWidget(self.v_summary)
-        v_right.addWidget(self.v_overruled)
-        vf_layout.addLayout(v_right, stretch=6)
+        cb_left.addWidget(cb_title)
+        cb_left.addWidget(self.coord_action_lbl)
+        cb_left.addWidget(self.coord_just_lbl)
+        cb_left.addWidget(self.coord_overruled_lbl)
+        cb_layout.addLayout(cb_left, stretch=8)
 
-        root.addWidget(self.verdict_frame, stretch=1)
+        cb_right = QVBoxLayout()
+        cb_right.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        cb_right.setSpacing(3)
+        ros_hdr = QLabel("ROS 2 TOPIC PUBLISHED")
+        ros_hdr.setStyleSheet("font-size: 10px; color: #a0aec0; text-align: right;")
+        ros_topic = QLabel("/aerogrid/utm_commands")
+        ros_topic.setObjectName("rosTopic")
+        self.ros_status = QLabel("Status: CONFLICT RESOLVED (Tier 1)")
+        self.ros_status.setObjectName("rosStatus")
+
+        cb_right.addWidget(ros_hdr)
+        cb_right.addWidget(ros_topic)
+        cb_right.addWidget(self.ros_status)
+        cb_layout.addLayout(cb_right, stretch=3)
+
+        root.addWidget(self.coord_banner, stretch=2)
 
         # ----------------------------------------------------------------------
-        # Real-Time Mission Event Ticker (Clean Audit Log Stream)
+        # Footer: SQLite WAL Status & Audit Event ID
         # ----------------------------------------------------------------------
-        self.ticker_box = QFrame()
-        self.ticker_box.setObjectName("tickerBox")
-        tb_layout = QHBoxLayout(self.ticker_box)
-        tb_layout.setContentsMargins(12, 6, 12, 6)
-        self.ticker_label = QLabel("MISSION LOG: System initialized. SQLite WAL audit active. CoppeliaSim bridge ready.")
-        self.ticker_label.setObjectName("tickerLabel")
-        tb_layout.addWidget(self.ticker_label)
-        root.addWidget(self.ticker_box)
+        footer = QHBoxLayout()
+        footer.setContentsMargins(2, 0, 2, 0)
+
+        wal_box = QHBoxLayout()
+        wal_box.setSpacing(6)
+        wal_dot = QLabel("●")
+        wal_dot.setObjectName("walDot")
+        wal_txt = QLabel("SQLite WAL Audit Engine: PRAGMA journal_mode=WAL | Cryptographic Provenance Active")
+        wal_txt.setObjectName("walText")
+        wal_box.addWidget(wal_dot)
+        wal_box.addWidget(wal_txt)
+        footer.addLayout(wal_box)
+
+        footer.addStretch()
+
+        self.audit_event_lbl = QLabel("Audit Event ID: evt_f8de8509874447cb9ef4002c47dd968d")
+        self.audit_event_lbl.setObjectName("auditEventId")
+        footer.addWidget(self.audit_event_lbl)
+
+        root.addLayout(footer)
 
     # --------------------------------------------------------------------------
-    # UI Component Generators
+    # Component Helpers
     # --------------------------------------------------------------------------
-    def _create_scenario_btn(self, title: str, subtitle: str, color: str, idx: int) -> QPushButton:
-        btn = QPushButton()
+    def _create_scenario_btn(self, title: str, idx: int) -> QPushButton:
+        btn = QPushButton(title)
         btn.setObjectName("scenBtn")
         btn.setCursor(QCursor(Qt.PointingHandCursor))
-        btn.setMinimumHeight(52)
-
-        l = QVBoxLayout(btn)
-        l.setContentsMargins(12, 6, 12, 6)
-        l.setSpacing(1)
-        t = QLabel(title)
-        t.setStyleSheet(f"color: {color}; font-weight: 800; font-size: 11px;")
-        s = QLabel(subtitle)
-        s.setStyleSheet("color: #718096; font-size: 9px;")
-        l.addWidget(t)
-        l.addWidget(s)
-
         btn.clicked.connect(lambda: self.run_scenario(idx))
-        btn.color = color
         btn.idx = idx
         return btn
 
-    def _create_avionics_gauge(self, label: str, val: str, color: str, sub: str) -> QFrame:
-        gauge = QFrame()
-        gauge.setObjectName("gaugeCard")
-        l = QVBoxLayout(gauge)
-        l.setContentsMargins(12, 8, 12, 8)
-        l.setSpacing(1)
+    def _create_telem_box(self, label: str, val: str) -> QFrame:
+        box = QFrame()
+        box.setObjectName("telemBox")
+        l = QVBoxLayout(box)
+        l.setContentsMargins(8, 6, 8, 6)
+        l.setSpacing(2)
 
         lbl = QLabel(label)
-        lbl.setObjectName("gaugeLabel")
+        lbl.setObjectName("telemLabel")
         v = QLabel(val)
-        v.setObjectName("gaugeValue")
-        v.setStyleSheet(f"color: {color};")
-        s = QLabel(sub)
-        s.setObjectName("gaugeSub")
+        v.setObjectName("telemValue")
 
         l.addWidget(lbl)
         l.addWidget(v)
-        l.addWidget(s)
-        gauge.val_lbl = v
-        return gauge
+        box.val_lbl = v
+        return box
 
-    def _create_domain_card(self, agent_name: str, tier_badge: str, action_text: str, status_text: str, law_tag: str, theme_color: str) -> QFrame:
+    def _create_agent_card(self, agent_title: str, theme_color: str, conf_text: str, action_text: str, just_text: str, citations: List[str]) -> QFrame:
         card = QFrame()
-        card.setObjectName("domainCard")
+        card.setObjectName("agentCard")
         l = QVBoxLayout(card)
-        l.setContentsMargins(14, 10, 14, 10)
-        l.setSpacing(4)
+        l.setContentsMargins(12, 10, 12, 10)
+        l.setSpacing(5)
 
-        head = QHBoxLayout()
-        name = QLabel(agent_name)
-        name.setObjectName("cardName")
-        badge = QLabel(tier_badge)
-        badge.setObjectName("cardBadge")
-        badge.setStyleSheet(f"color: {theme_color}; border: 1px solid {theme_color};")
-        head.addWidget(name)
-        head.addStretch()
-        head.addWidget(badge)
-        l.addLayout(head)
+        # Header: Name + Conf pill
+        h = QHBoxLayout()
+        t = QLabel(agent_title)
+        t.setStyleSheet(f"font-size: 12px; font-weight: 700; color: {theme_color};")
+        c = QLabel(conf_text)
+        c.setObjectName("confPill")
+        h.addWidget(t)
+        h.addStretch()
+        h.addWidget(c)
+        l.addLayout(h)
 
-        mid = QHBoxLayout()
+        # Action
         act = QLabel(action_text)
-        act.setObjectName("cardAction")
-        stat = QLabel(status_text)
-        stat.setObjectName("cardStatus")
-        stat.setStyleSheet(f"color: {theme_color}; font-weight: 800;")
-        mid.addWidget(act)
-        mid.addStretch()
-        mid.addWidget(stat)
-        l.addLayout(mid)
+        act.setObjectName("agentAction")
+        act.setWordWrap(True)
+        l.addWidget(act)
 
-        law = QLabel(law_tag)
-        law.setObjectName("cardLaw")
-        l.addWidget(law)
+        # Justification
+        jst = QLabel(just_text)
+        jst.setObjectName("agentJust")
+        jst.setWordWrap(True)
+        l.addWidget(jst)
 
+        # Citations row
+        cit_layout = QHBoxLayout()
+        cit_layout.setSpacing(6)
+        card.cit_layout = cit_layout
+        for cit in citations:
+            tag = QLabel(cit)
+            tag.setObjectName("citationTag")
+            cit_layout.addWidget(tag)
+        cit_layout.addStretch()
+        l.addLayout(cit_layout)
+
+        card.conf_lbl = c
         card.action_lbl = act
-        card.status_lbl = stat
-        card.badge_lbl = badge
+        card.just_lbl = jst
         return card
 
     # --------------------------------------------------------------------------
-    # Scenario Coordination & Execution
+    # Live Scenario Execution & ZeroMQ Actuation
     # --------------------------------------------------------------------------
-    def run_scenario(self, scenario_idx: int):
-        self.current_scenario_idx = scenario_idx
-        self.radar.set_scenario(scenario_idx)
+    def run_scenario(self, idx: int):
+        self.current_scenario_idx = idx
+        self.radar.set_scenario(idx)
 
-        # Highlight active button
+        # Update button active states
         for b in [self.btn_scen0, self.btn_scen1, self.btn_scen2, self.btn_scen3]:
-            if b.idx == scenario_idx:
-                b.setStyleSheet(f"background: #132238; border: 2px solid {b.color}; border-radius: 6px;")
-            else:
-                b.setStyleSheet("background: #0d1524; border: 1px solid #1a273e; border-radius: 6px;")
+            b.setProperty("active", b.idx == idx)
+            b.style().unpolish(b)
+            b.style().polish(b)
 
-        state = self._build_state(scenario_idx)
+        state = self._get_state_for_scenario(idx)
         drone_id = state["drone_id"]
+        self.target_drone_badge.setText(drone_id)
 
-        # Deliberate with domain agents
+        # Execute Multi-Agent Deliberation
         av_resp = self.aviation_agent.evaluate_state(state)
-        tel_resp = self.telecom_agent.evaluate_state(state)
-        flt_resp = self.fleet_agent.evaluate_state(state)
+        tc_resp = self.telecom_agent.evaluate_state(state)
+        fl_resp = self.fleet_agent.evaluate_state(state)
 
-        # Resolve with statutory priority
         cmd = self.coordination_engine.resolve_conflict(
             aviation_resp=av_resp,
-            telecom_resp=tel_resp,
-            fleet_resp=flt_resp,
+            telecom_resp=tc_resp,
+            fleet_resp=fl_resp,
             state=state,
             target_drone_id=drone_id,
         )
 
-        # Update HUD Visuals
-        self._update_hud(scenario_idx, av_resp, tel_resp, flt_resp, cmd, state)
+        # ZeroMQ Actuation in CoppeliaSim
+        act_info = self.zmq_bridge.execute_utm_action(cmd.action, drone_id)
 
-        # Actuate via ZeroMQ
-        act = self.zmq_bridge.execute_utm_action(cmd.action, drone_id)
+        # Update HUD Metrics
+        self.t_alt.val_lbl.setText(f"{state['altitude_m']}m")
+        self.t_speed.val_lbl.setText(f"{state['ground_speed_mps']} m/s")
+        self.t_soc.val_lbl.setText(f"{state['fleet_telemetry']['battery_soc_pct']}%")
+        self.t_rtt.val_lbl.setText(f"{state['telecom_metrics']['rtt_latency_ms']} ms")
+        self.t_loss.val_lbl.setText(f"{state['telecom_metrics']['packet_loss_pct']:.2f}%")
 
-        # Update Event Ticker
-        now_str = time.strftime("%H:%M:%S")
-        self.ticker_label.setText(
-            f"[{now_str}] SCENARIO {scenario_idx} • DIRECTIVE: {cmd.action} • TARGET Z: {act['target_z']:.2f}m • WAL AUDIT ID: {cmd.audit_event_id[:16]}..."
-        )
+        # Update Agent Cards
+        self.card_av.action_lbl.setText(av_resp.recommended_action)
+        self.card_av.conf_lbl.setText(f"Conf: {av_resp.confidence:.2f}")
+        self.card_av.just_lbl.setText(av_resp.justification)
 
-    def _build_state(self, s: int) -> dict:
+        self.card_tc.action_lbl.setText(tc_resp.recommended_action)
+        self.card_tc.conf_lbl.setText(f"Conf: {tc_resp.confidence:.2f}")
+        self.card_tc.just_lbl.setText(tc_resp.justification)
+
+        self.card_fl.action_lbl.setText(fl_resp.recommended_action)
+        self.card_fl.conf_lbl.setText(f"Conf: {fl_resp.confidence:.2f}")
+        self.card_fl.just_lbl.setText(fl_resp.justification)
+
+        # Update Coordination Banner
+        self.coord_action_lbl.setText(cmd.action)
+        self.coord_just_lbl.setText(cmd.justification)
+        if cmd.overruled_recommendations:
+            ov = cmd.overruled_recommendations[0]
+            self.coord_overruled_lbl.setText(f"Overruled: [{ov.get('agent_id')}] '{ov.get('action')}' — {ov.get('reason')}")
+            self.ros_status.setText("Status: CONFLICT RESOLVED (Tier 1)")
+        else:
+            self.coord_overruled_lbl.setText("Consensus: No agent recommendations overruled.")
+            self.ros_status.setText("Status: CONSENSUS NOMINAL")
+
+        if cmd.audit_event_id:
+            self.audit_event_lbl.setText(f"Audit Event ID: {cmd.audit_event_id}")
+
+    def _get_state_for_scenario(self, s: int) -> dict:
         if s == 0:
             return {
                 "drone_id": "UAS_CARGO_DXB_104",
-                "timestamp": "2026-11-08T17:00:00Z",
+                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ"),
                 "altitude_m": 120,
-                "ground_speed_mps": 20.0,
-                "airspace_traffic": {"manned_traffic_detected": False, "intruder_distance_m": 9999, "corridor_id": "DXB-BVLOS-04"},
-                "telecom_metrics": {"rtt_latency_ms": 32, "packet_loss_pct": 0.05, "link_lost": False, "urban_canyon_shadowing": False},
+                "ground_speed_mps": 22.5,
+                "airspace_traffic": {"manned_traffic_detected": False, "intruder_distance_m": 8500, "hems_in_vicinity": False},
+                "telecom_metrics": {"rtt_latency_ms": 35, "packet_loss_pct": 0.05, "link_lost": False, "urban_canyon_shadowing": False},
                 "fleet_telemetry": {"drone_id": "UAS_CARGO_DXB_104", "battery_soc_pct": 82.0, "cargo_type": "standard_parcel", "expedited_medical_payload": False},
             }
         elif s == 1:
             return {
                 "drone_id": "UAS_CARGO_DXB_104",
-                "timestamp": "2026-11-08T17:00:00Z",
+                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ"),
                 "altitude_m": 120,
                 "ground_speed_mps": 22.5,
-                "airspace_traffic": {
-                    "manned_traffic_detected": True,
-                    "intruder_type": "HEMS_AIR_AMBULANCE",
-                    "intruder_distance_m": 820,
-                    "bearing_deg": 45,
-                    "closing_speed_mps": 65.0,
-                    "estimated_tcas_tau_sec": 12.6,
-                    "corridor_id": "DXB-BVLOS-04",
-                },
+                "airspace_traffic": {"manned_traffic_detected": True, "intruder_distance_m": 820, "closing_velocity_mps": 65.0, "hems_in_vicinity": True},
                 "telecom_metrics": {"rtt_latency_ms": 42, "packet_loss_pct": 0.1, "link_lost": False, "urban_canyon_shadowing": False},
                 "fleet_telemetry": {"drone_id": "UAS_CARGO_DXB_104", "battery_soc_pct": 21.5, "cargo_type": "standard_parcel", "expedited_medical_payload": False},
             }
         elif s == 2:
             return {
                 "drone_id": "UAS_DELIVERY_AUH_209",
-                "timestamp": "2026-11-08T17:05:00Z",
+                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ"),
                 "altitude_m": 90,
                 "ground_speed_mps": 18.0,
-                "airspace_traffic": {"manned_traffic_detected": False, "intruder_distance_m": 4500},
+                "airspace_traffic": {"manned_traffic_detected": False, "intruder_distance_m": 4500, "hems_in_vicinity": False},
                 "telecom_metrics": {"rtt_latency_ms": 295, "packet_loss_pct": 3.8, "link_lost": False, "urban_canyon_shadowing": True},
                 "fleet_telemetry": {"drone_id": "UAS_DELIVERY_AUH_209", "battery_soc_pct": 58.0, "cargo_type": "high_value_retail", "expedited_medical_payload": False},
             }
         else:
             return {
                 "drone_id": "UAS_MED_SHJ_311",
-                "timestamp": "2026-11-08T17:10:00Z",
+                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ"),
                 "altitude_m": 105,
-                "ground_speed_mps": 15.0,
-                "airspace_traffic": {"manned_traffic_detected": False, "intruder_distance_m": 6000},
+                "ground_speed_mps": 20.0,
+                "airspace_traffic": {"manned_traffic_detected": False, "intruder_distance_m": 8000, "hems_in_vicinity": False},
                 "telecom_metrics": {"rtt_latency_ms": 38, "packet_loss_pct": 0.05, "link_lost": False, "urban_canyon_shadowing": False},
-                "fleet_telemetry": {"drone_id": "UAS_MED_SHJ_311", "battery_soc_pct": 14.2, "cargo_type": "emergency_antivenom", "expedited_medical_payload": True},
+                "fleet_telemetry": {"drone_id": "UAS_MED_SHJ_311", "battery_soc_pct": 16.2, "cargo_type": "lab_blood_samples", "expedited_medical_payload": True},
             }
-
-    def _update_hud(self, s: int, av, tel, flt, cmd, state):
-        # 1. Update Avionics Gauges
-        if s == 0:
-            self.gauge_alt.val_lbl.setText("2.00 m")
-            self.gauge_alt.val_lbl.setStyleSheet("color: #30d158;")
-            self.gauge_battery.val_lbl.setText("82%")
-            self.gauge_battery.val_lbl.setStyleSheet("color: #30d158;")
-            self.gauge_c2.val_lbl.setText("32 ms")
-            self.gauge_c2.val_lbl.setStyleSheet("color: #30d158;")
-        elif s == 1:
-            self.gauge_alt.val_lbl.setText("LAND (0.05m)")
-            self.gauge_alt.val_lbl.setStyleSheet("color: #ff453a;")
-            self.gauge_battery.val_lbl.setText("21.5%")
-            self.gauge_battery.val_lbl.setStyleSheet("color: #ff9f0a;")
-            self.gauge_c2.val_lbl.setText("42 ms")
-        elif s == 2:
-            self.gauge_alt.val_lbl.setText("1.50 m (-0.5m)")
-            self.gauge_alt.val_lbl.setStyleSheet("color: #00f3ff;")
-            self.gauge_c2.val_lbl.setText("295 ms (LOSS 3.8%)")
-            self.gauge_c2.val_lbl.setStyleSheet("color: #ff453a;")
-            self.gauge_battery.val_lbl.setText("58%")
-        else:
-            self.gauge_alt.val_lbl.setText("0.80 m (Pad 1)")
-            self.gauge_alt.val_lbl.setStyleSheet("color: #ff9f0a;")
-            self.gauge_battery.val_lbl.setText("14.2% (CRITICAL)")
-            self.gauge_battery.val_lbl.setStyleSheet("color: #ff453a;")
-
-        # 2. Update Domain Cards with clean visual cues
-        self.card_aviation.action_lbl.setText(av.recommended_action)
-        self.card_telecom.action_lbl.setText(tel.recommended_action)
-        self.card_fleet.action_lbl.setText(flt.recommended_action)
-
-        if s == 0:
-            self.card_aviation.status_lbl.setText("NOMINAL")
-            self.card_aviation.status_lbl.setStyleSheet("color: #30d158; font-weight: 800;")
-            self.card_telecom.status_lbl.setText("NOMINAL")
-            self.card_telecom.status_lbl.setStyleSheet("color: #30d158; font-weight: 800;")
-            self.card_fleet.status_lbl.setText("NOMINAL")
-            self.card_fleet.status_lbl.setStyleSheet("color: #30d158; font-weight: 800;")
-
-        elif s == 1:
-            self.card_aviation.status_lbl.setText("🚨 CRITICAL ACTION")
-            self.card_aviation.status_lbl.setStyleSheet("color: #ff453a; font-weight: 800;")
-            self.card_telecom.status_lbl.setText("NOMINAL")
-            self.card_telecom.status_lbl.setStyleSheet("color: #30d158; font-weight: 800;")
-            self.card_fleet.status_lbl.setText("OVERRULED")
-            self.card_fleet.status_lbl.setStyleSheet("color: #718096; font-weight: 800;")
-
-        elif s == 2:
-            self.card_aviation.status_lbl.setText("NOMINAL")
-            self.card_aviation.status_lbl.setStyleSheet("color: #30d158; font-weight: 800;")
-            self.card_telecom.status_lbl.setText("⚠️ C2 DEGRADED")
-            self.card_telecom.status_lbl.setStyleSheet("color: #00f3ff; font-weight: 800;")
-            self.card_fleet.status_lbl.setText("OVERRULED")
-            self.card_fleet.status_lbl.setStyleSheet("color: #718096; font-weight: 800;")
-
-        else:
-            self.card_aviation.status_lbl.setText("NOMINAL")
-            self.card_aviation.status_lbl.setStyleSheet("color: #30d158; font-weight: 800;")
-            self.card_telecom.status_lbl.setText("NOMINAL")
-            self.card_telecom.status_lbl.setStyleSheet("color: #30d158; font-weight: 800;")
-            self.card_fleet.status_lbl.setText("⚡ BATTERY CRITICAL")
-            self.card_fleet.status_lbl.setStyleSheet("color: #ff9f0a; font-weight: 800;")
-
-        # 3. Update Verdict Banner
-        self.v_action.setText(cmd.action)
-        if s == 0:
-            self.v_badge.setText("STATUS: NOMINAL BVLOS CRUISE (STABLE 2.0m HOVER)")
-            self.v_badge.setStyleSheet("color: #30d158; font-weight: 800;")
-            self.v_summary.setText("Airspace clear, C2 link nominal, battery healthy. Drone maintaining assigned corridor setpoint.")
-            self.v_overruled.setText("Consensus Reached: No agent recommendations overruled.")
-            self.verdict_frame.setStyleSheet("background: #0c182b; border: 1.5px solid #30d158; border-radius: 8px;")
-
-        elif s == 1:
-            self.v_badge.setText("TIER 1 STATUTORY MANDATE ENFORCED (AIRSPACE SAFETY)")
-            self.v_badge.setStyleSheet("color: #ff453a; font-weight: 800;")
-            self.v_summary.setText("HEMS medical helicopter detected at 820m. Airspace law strictly commands immediate landing to yield corridor.")
-            self.v_overruled.setText("Overruled: [Fleet Agent] Delivery SLA subordinated to life-safety separation minima.")
-            self.verdict_frame.setStyleSheet("background: #1a0f16; border: 1.5px solid #ff453a; border-radius: 8px;")
-
-        elif s == 2:
-            self.v_badge.setText("TIER 2 STATUTORY MANDATE ENFORCED (C2 LINK QOS)")
-            self.v_badge.setStyleSheet("color: #00f3ff; font-weight: 800;")
-            self.v_summary.setText("5G latency spiked to 295ms due to skyscraper shadowing. Dropping altitude to 1.5m to regain gNodeB line-of-sight.")
-            self.v_overruled.setText("Overruled: [Fleet Agent] Commercial flight schedule subordinated to C2 link failsafe requirements.")
-            self.verdict_frame.setStyleSheet("background: #091729; border: 1.5px solid #00f3ff; border-radius: 8px;")
-
-        else:
-            self.v_badge.setText("TIER 3 FLEET SAFETY DIRECTIVE APPROVED")
-            self.v_badge.setStyleSheet("color: #ff9f0a; font-weight: 800;")
-            self.v_summary.setText("Battery depleted to 14.2%. Airspace and C2 link confirmed clear. Rerouting flight path to Vertiport Pad 1.")
-            self.v_overruled.setText("Consensus Approved: Emergency energy diversion authorized pursuant to Fleet SOP Sec 4.2.")
-            self.verdict_frame.setStyleSheet("background: #19140c; border: 1.5px solid #ff9f0a; border-radius: 8px;")
 
     def _poll_telemetry(self):
         telem = self.zmq_bridge.read_telemetry()
-        if telem["connected"]:
-            self.gauge_cop.val_lbl.setText("CONNECTED")
-            self.gauge_cop.val_lbl.setStyleSheet("color: #30d158;")
-            self.radar.update_drone_telemetry(telem["x"], telem["y"], telem["z"])
-        else:
-            self.gauge_cop.val_lbl.setText("STANDBY")
-            self.gauge_cop.val_lbl.setStyleSheet("color: #718096;")
+        if telem.get("connected"):
+            pos = telem.get("position", {"x": 0.0, "y": 0.0, "z": 2.0})
+            self.radar.update_drone_pos(pos)
 
-    # --------------------------------------------------------------------------
-    # Clean Glass Aerospace Theme (QSS)
-    # --------------------------------------------------------------------------
-    def _apply_glass_theme(self):
+    def _apply_theme(self):
         self.setStyleSheet("""
-            QMainWindow, QWidget {
-                background-color: #080c14;
-                color: #e2e8f0;
-                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            QMainWindow {
+                background-color: #0a0e17;
             }
-            #brandTitle {
-                font-size: 22px;
-                font-weight: 900;
-                color: #00f3ff;
-                letter-spacing: 2px;
-            }
-            #brandSubtitle {
-                font-size: 9px;
-                font-weight: 700;
-                color: #64748b;
-                letter-spacing: 1.2px;
-            }
-            #gaugeCard {
-                background-color: #0c1322;
-                border: 1px solid #162238;
-                border-radius: 6px;
-            }
-            #gaugeLabel {
-                font-size: 9px;
+            #mainTitle {
+                font-size: 20px;
                 font-weight: 800;
-                color: #94a3b8;
-                letter-spacing: 0.8px;
+                color: #00f2fe;
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
             }
-            #gaugeValue {
-                font-size: 15px;
-                font-weight: 900;
-                font-family: 'Monospace', monospace;
-            }
-            #gaugeSub {
-                font-size: 8px;
-                color: #64748b;
-            }
-            #radarContainer {
-                background-color: #0a111e;
-                border: 1px solid #16243c;
-                border-radius: 8px;
-            }
-            #domainCard {
-                background-color: #0b1426;
-                border: 1px solid #192742;
-                border-radius: 8px;
-            }
-            #cardName {
-                font-size: 11px;
-                font-weight: 800;
-                color: #f1f5f9;
-            }
-            #cardBadge {
-                font-size: 9px;
-                font-weight: 800;
-                padding: 2px 7px;
-                border-radius: 4px;
-                font-family: 'Monospace', monospace;
-            }
-            #cardAction {
-                font-size: 12px;
-                font-weight: 800;
-                color: #38bdf8;
-                font-family: 'Monospace', monospace;
-            }
-            #cardStatus {
-                font-size: 10px;
-                font-weight: 800;
-            }
-            #cardLaw {
-                font-size: 9px;
-                color: #64748b;
-                font-style: italic;
-            }
-            #verdictFrame {
-                background: #0c182b;
-                border: 1.5px solid #00f3ff;
-                border-radius: 8px;
-            }
-            #vBadge {
-                font-size: 10px;
-                font-weight: 800;
-                letter-spacing: 1px;
-            }
-            #vAction {
-                font-size: 15px;
-                font-weight: 900;
-                color: #00f3ff;
-                font-family: 'Monospace', monospace;
-            }
-            #vSummary {
-                font-size: 11px;
-                color: #e2e8f0;
-                font-weight: 500;
-            }
-            #vOverruled {
-                font-size: 10px;
-                color: #94a3b8;
-                font-style: italic;
-            }
-            #tickerBox {
-                background-color: #05080e;
-                border: 1px solid #111a2e;
-                border-radius: 4px;
-            }
-            #tickerLabel {
+            #badgeItu {
                 font-size: 9.5px;
-                color: #38bdf8;
+                font-weight: 700;
+                color: #4facfe;
+                letter-spacing: 0.5px;
+            }
+            #scenBtn {
+                background-color: #111827;
+                border: 1px solid #2d3748;
+                border-radius: 6px;
+                color: #a0aec0;
+                padding: 6px 14px;
+                font-size: 11.5px;
+                font-weight: 600;
+            }
+            #scenBtn:hover {
+                border-color: #00f2fe;
+                color: #ffffff;
+            }
+            #scenBtn[active="true"] {
+                background-color: rgba(0, 242, 254, 0.12);
+                border: 1.5px solid #00f2fe;
+                color: #00f2fe;
+            }
+            #radarCard {
+                background-color: #111827;
+                border: 1px solid #2d3748;
+                border-radius: 8px;
+            }
+            #cardHeaderLabel {
+                font-size: 11px;
+                font-weight: 700;
+                text-transform: uppercase;
+                letter-spacing: 0.5px;
+                color: #a0aec0;
+            }
+            #droneBadge {
+                font-size: 11px;
+                font-weight: 700;
+                font-family: 'Monospace', monospace;
+                color: #00f2fe;
+            }
+            #telemBox {
+                background-color: #1f293d;
+                border-radius: 5px;
+                border-left: 3px solid #4facfe;
+            }
+            #telemLabel {
+                font-size: 8.5px;
+                font-weight: 700;
+                text-transform: uppercase;
+                color: #a0aec0;
+            }
+            #telemValue {
+                font-size: 13px;
+                font-weight: 800;
+                font-family: 'Monospace', monospace;
+                color: #f7fafc;
+            }
+            #agentCard {
+                background-color: #111827;
+                border: 1px solid #2d3748;
+                border-radius: 8px;
+            }
+            #confPill {
+                background-color: rgba(255, 255, 255, 0.08);
+                color: #a0aec0;
+                font-size: 9px;
+                font-weight: 600;
+                padding: 2px 6px;
+                border-radius: 4px;
+                font-family: 'Monospace', monospace;
+            }
+            #agentAction {
+                font-size: 11px;
+                font-weight: 800;
+                color: #f7fafc;
+                font-family: 'Monospace', monospace;
+            }
+            #agentJust {
+                font-size: 9.5px;
+                color: #a0aec0;
+                line-height: 1.3;
+            }
+            #citationTag {
+                background-color: rgba(79, 172, 254, 0.12);
+                border: 1px solid rgba(79, 172, 254, 0.35);
+                color: #4facfe;
+                font-size: 8px;
+                font-weight: 600;
+                padding: 2px 6px;
+                border-radius: 3px;
+            }
+            #coordBanner {
+                background: linear-gradient(135deg, rgba(72, 187, 120, 0.1), rgba(17, 24, 39, 0.95));
+                border: 1px solid rgba(72, 187, 120, 0.4);
+                border-radius: 8px;
+            }
+            #cbTitle {
+                font-size: 10px;
+                font-weight: 700;
+                text-transform: uppercase;
+                color: #48bb78;
+                letter-spacing: 0.5px;
+            }
+            #coordAction {
+                font-size: 13px;
+                font-weight: 900;
+                color: #f7fafc;
+                font-family: 'Monospace', monospace;
+            }
+            #coordJust {
+                font-size: 10px;
+                color: #a0aec0;
+            }
+            #coordOverruled {
+                background-color: rgba(245, 101, 101, 0.12);
+                border: 1px solid rgba(245, 101, 101, 0.25);
+                color: #feb2b2;
+                padding: 4px 8px;
+                border-radius: 4px;
+                font-size: 9.5px;
+                font-style: italic;
+            }
+            #rosTopic {
+                font-size: 11.5px;
+                font-weight: 800;
+                color: #00f2fe;
+                font-family: 'Monospace', monospace;
+            }
+            #rosStatus {
+                font-size: 9.5px;
+                font-weight: 700;
+                color: #48bb78;
+            }
+            #walDot {
+                color: #48bb78;
+                font-size: 10px;
+            }
+            #walText {
+                font-size: 9.5px;
+                color: #718096;
+            }
+            #auditEventId {
+                font-size: 9.5px;
+                color: #718096;
                 font-family: 'Monospace', monospace;
             }
         """)
 
 
 def main():
-    app = QApplication(sys.argv)
-    window = AeroGridTacticalHUD()
-    window.show()
+    app = QApplication.instance() or QApplication(sys.argv)
+    hud = AeroGridTacticalHUD()
+    hud.show()
     sys.exit(app.exec_())
 
 
