@@ -37,7 +37,7 @@ from backend.agents.aviation_agent import AviationAgent
 from backend.agents.telecom_agent import TelecomAgent
 from backend.agents.fleet_agent import FleetAgent
 from backend.agents.coordination_agent import CoordinationEngine
-from backend.simulation.coppelia_zmq_bridge import CoppeliaZMQBridge
+from backend.simulation.coppelia_zmq_bridge import CoppeliaZMQBridge, get_coppelia_bridge
 
 logging.basicConfig(
     level=logging.INFO,
@@ -61,8 +61,7 @@ class BackendCore:
         self.fleet_agent = FleetAgent(llm_client=None, retriever=self.retriever)
         self.coordinator = CoordinationEngine(audit_engine=self.audit_engine, retriever=self.retriever)
 
-        self.zmq_bridge = CoppeliaZMQBridge()
-        self.zmq_bridge.connect()
+        self.zmq_bridge = get_coppelia_bridge()
 
         self.active_scenario_idx = 0
         self.last_deliberation: dict = {}

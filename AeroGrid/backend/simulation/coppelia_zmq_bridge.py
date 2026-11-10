@@ -1,21 +1,15 @@
-"""AeroGrid CoppeliaSim ZeroMQ Remote API Bridge.
+"""AeroGrid CoppeliaSim ZeroMQ Remote API Bridge (Singleton).
 
 Connects the Python Multi-Agent UTM architecture directly to CoppeliaSim
 via the native ZeroMQ Remote API (port 23000).
 
-Manages a dual-drone fleet within the Dubai Sky Dome airspace corridor:
-  - Drone 1 (UAS_CARGO_DXB_104): Primary commercial delivery UAS executing
-    arbitrated UTM flight directives (corridor cruise, emergency descent for HEMS,
-    5G shadow altitude adjustment, vertiport divert).
-  - Drone 2 (HEMS_AIR_AMBULANCE / UAS_PEER_209): Priority manned emergency vehicle or
-    commercial fleet peer, demonstrating live tactical deconfliction, corridor separation,
-    and fleet management.
-
-Key Features:
+Features:
+  - Singleton Pattern: Guarantees a single authoritative bridge across Web server,
+    PyQt5 HUD, and ROS 2 background workers, preventing multi-thread command conflicts.
   - Realistic Aerodynamic Velocity Limiting: Smooth tick-by-tick trajectory interpolation
-    (max ~0.9 m/s vertical, ~1.8 m/s horizontal) preventing unnatural coordinate snapping or PID saturation.
-  - Multi-Object Scene Resolution: Discovers and pairs both Quadcopter bodies and Target dummies in CoppeliaSim.
-  - Auto-Spawning: If only one Quadcopter is present in the scene, dynamically loads the second model.
+    (max ~0.8 m/s vertical, ~1.2 m/s horizontal) preventing abrupt coordinate snaps or PID saturation.
+  - Unambiguous Scene Resolution: Correctly matches Drone 1 (commercial UAS) and
+    Drone 2 (HEMS / peer traffic) to their respective target dummies without cross-talk.
 """
 
 from __future__ import annotations
@@ -25,7 +19,7 @@ import math
 import os
 import threading
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger("aerogrid.coppelia_zmq")
 
@@ -42,7 +36,7 @@ except ImportError:
 
 
 class CoppeliaZMQBridge:
-    """Cyber-physical bridge communicating with CoppeliaSim via ZeroMQ with multi-drone fleet support."""
+    """Authoritative Cyber-physical bridge communicating with CoppeliaSim via ZeroMQ."""
 
     def __init__(self, host: str = "127.0.0.1", port: int = 23000):
         self.host = host
@@ -53,14 +47,14 @@ class CoppeliaZMQBridge:
         self.sim_time: float = 0.0
 
         self.lock = threading.Lock()
+        self.zmq_lock = threading.Lock()
         self._stop_flight_loop = False
         self._flight_thread: Optional[threading.Thread] = None
-        self._spawn_attempted = False
         self._last_reconnect_try = 0.0
 
         # Maximum realistic multirotor aerodynamic speeds
-        self.MAX_VERT_SPEED = 0.90   # m/s (~2.1s to descend 1.95m)
-        self.MAX_HORIZ_SPEED = 1.80  # m/s (~1.2s to transit 2.16m)
+        self.MAX_VERT_SPEED = 0.80   # m/s (~2.4s to descend 1.95m smoothly)
+        self.MAX_HORIZ_SPEED = 1.20  # m/s (~1.6s to transit 1.8m without excessive tilt)
 
         # ----------------------------------------------------------------------
         # Fleet Configuration: Drone 1 (Primary UAS) & Drone 2 (HEMS / Peer)
@@ -84,16 +78,16 @@ class CoppeliaZMQBridge:
             "alias": "Quadcopter_Peer",
             "quad_handle": -1,
             "target_handle": -1,
-            "current_pos": [1.2, 0.6, 2.6],
-            "goal_pos": [1.2, 0.6, 2.6],
-            "real_pos": [1.2, 0.6, 2.6],
+            "current_pos": [1.2, 0.6, 2.4],
+            "goal_pos": [1.2, 0.6, 2.4],
+            "real_pos": [1.2, 0.6, 2.4],
             "vel": [0.0, 0.0, 0.0],
             "battery_soc": 95.0,
             "status": "HOLDING_SEPARATION",
             "role": "Commercial Fleet Peer",
         }
 
-        # Backwards compatibility attributes for single-drone consumers
+        # Legacy compatibility attributes for single-drone consumers
         self.quadcopter_handle: int = -1
         self.target_handle: int = -1
         self.current_target_pos: List[float] = [0.0, 0.0, 2.0]
@@ -115,7 +109,7 @@ class CoppeliaZMQBridge:
         last_t = time.time()
         while not self._stop_flight_loop:
             now = time.time()
-            dt = max(0.01, min(0.1, now - last_t))
+            dt = max(0.01, min(0.05, now - last_t))
             last_t = now
 
             self._step_smooth_flight(dt)
@@ -124,9 +118,9 @@ class CoppeliaZMQBridge:
     def _step_smooth_flight(self, dt: float) -> None:
         """Step positions for both drones smoothly toward their respective goals."""
         with self.lock:
-            # 1. Update Drone 1
+            # 1. Update Drone 1 position incrementally
             self._interpolate_drone(self.drone1, dt)
-            # 2. Update Drone 2
+            # 2. Update Drone 2 position incrementally
             self._interpolate_drone(self.drone2, dt)
 
             # Sync legacy compatibility fields with Drone 1
@@ -135,30 +129,35 @@ class CoppeliaZMQBridge:
             self.quadcopter_handle = self.drone1["quad_handle"]
             self.target_handle = self.drone1["target_handle"]
 
-            # 3. If connected to CoppeliaSim, push smooth setpoints and poll true coordinates
-            if self.is_connected and self.sim:
+            d1_target = self.drone1["target_handle"]
+            d1_quad = self.drone1["quad_handle"]
+            d2_target = self.drone2["target_handle"]
+            d2_quad = self.drone2["quad_handle"]
+
+            d1_cpos = list(self.drone1["current_pos"])
+            d2_cpos = list(self.drone2["current_pos"])
+
+        # 3. If connected to CoppeliaSim, push smooth setpoints and poll true coordinates
+        if self.is_connected and self.sim:
+            with self.zmq_lock:
                 try:
                     # Actuate Drone 1 target dummy
-                    if self.drone1["target_handle"] != -1:
-                        self.sim.setObjectPosition(self.drone1["target_handle"], -1, self.drone1["current_pos"])
-                    if self.drone1["quad_handle"] != -1:
-                        p1 = self.sim.getObjectPosition(self.drone1["quad_handle"], -1)
-                        v1, _ = self.sim.getObjectVelocity(self.drone1["quad_handle"])
+                    if d1_target != -1:
+                        self.sim.setObjectPosition(d1_target, -1, d1_cpos)
+                    if d1_quad != -1:
+                        p1 = self.sim.getObjectPosition(d1_quad, -1)
                         self.drone1["real_pos"] = list(p1)
-                        self.drone1["vel"] = list(v1)
 
                     # Actuate Drone 2 target dummy
-                    if self.drone2["target_handle"] != -1:
-                        self.sim.setObjectPosition(self.drone2["target_handle"], -1, self.drone2["current_pos"])
-                    if self.drone2["quad_handle"] != -1:
-                        p2 = self.sim.getObjectPosition(self.drone2["quad_handle"], -1)
-                        v2, _ = self.sim.getObjectVelocity(self.drone2["quad_handle"])
+                    if d2_target != -1:
+                        self.sim.setObjectPosition(d2_target, -1, d2_cpos)
+                    if d2_quad != -1:
+                        p2 = self.sim.getObjectPosition(d2_quad, -1)
                         self.drone2["real_pos"] = list(p2)
-                        self.drone2["vel"] = list(v2)
 
                     self.sim_time = self.sim.getSimulationTime()
                 except Exception as e:
-                    logger.debug("[CoppeliaZMQ] Error updating CoppeliaSim in flight loop: %s", e)
+                    logger.debug("[CoppeliaZMQ] Error in ZeroMQ flight loop step: %s", e)
 
     def _interpolate_drone(self, drone: Dict[str, Any], dt: float) -> None:
         """Smoothly step target coordinates toward goal at realistic speed bounds."""
@@ -190,7 +189,7 @@ class CoppeliaZMQBridge:
         else:
             curr[2] = goal[2]
 
-        # In mock / disconnected mode, real_pos follows current_pos
+        # In mock / disconnected mode, real_pos directly tracks current_pos
         if not self.is_connected or drone["quad_handle"] == -1:
             drone["real_pos"] = list(curr)
 
@@ -211,33 +210,34 @@ class CoppeliaZMQBridge:
             self.client = None
             return False
 
-        # 2. Connect ZeroMQ client with timeouts
-        try:
-            self.client = RemoteAPIClient(host=self.host, port=self.port)
-            if hasattr(self.client, "socket") and self.client.socket:
-                import zmq
-                self.client.socket.setsockopt(zmq.RCVTIMEO, 1000)
-                self.client.socket.setsockopt(zmq.SNDTIMEO, 1000)
+        # 2. Connect ZeroMQ client with strict timeouts
+        with self.zmq_lock:
+            try:
+                self.client = RemoteAPIClient(host=self.host, port=self.port)
+                if hasattr(self.client, "socket") and self.client.socket:
+                    import zmq
+                    self.client.socket.setsockopt(zmq.RCVTIMEO, 1000)
+                    self.client.socket.setsockopt(zmq.SNDTIMEO, 1000)
 
-            self.sim = self.client.require("sim")
-            sim_time = self.sim.getSimulationTime()
-            self.is_connected = True
-            logger.info("[CoppeliaZMQ] Connected to CoppeliaSim ZMQ server at %s:%d (Sim time: %.2fs)", self.host, self.port, sim_time)
+                self.sim = self.client.require("sim")
+                sim_time = self.sim.getSimulationTime()
+                self.is_connected = True
+                logger.info("[CoppeliaZMQ] Connected to CoppeliaSim ZMQ server at %s:%d (Sim time: %.2fs)", self.host, self.port, sim_time)
 
-            # Auto-start simulation if stopped
-            sim_state = self.sim.getSimulationState()
-            if sim_state == self.sim.simulation_stopped:
-                self.sim.startSimulation()
-                logger.info("[CoppeliaZMQ] Simulation automatically started.")
+                # Auto-start simulation if stopped
+                sim_state = self.sim.getSimulationState()
+                if sim_state == self.sim.simulation_stopped:
+                    self.sim.startSimulation()
+                    logger.info("[CoppeliaZMQ] Simulation automatically started.")
 
-            self._resolve_scene_objects()
-            return True
-        except Exception as e:
-            self.is_connected = False
-            self.sim = None
-            self.client = None
-            logger.info("[CoppeliaZMQ] ZeroMQ handshake failed on %s:%d: %s", self.host, self.port, e)
-            return False
+                self._resolve_scene_objects()
+                return True
+            except Exception as e:
+                self.is_connected = False
+                self.sim = None
+                self.client = None
+                logger.info("[CoppeliaZMQ] ZeroMQ handshake failed on %s:%d: %s", self.host, self.port, e)
+                return False
 
     def _resolve_scene_objects(self) -> None:
         """Scan CoppeliaSim scene and accurately pair Drone 1 and Drone 2 with their target dummies."""
@@ -246,75 +246,66 @@ class CoppeliaZMQBridge:
 
         try:
             objs = self.sim.getObjectsInTree(self.sim.handle_scene)
-            quads = []
-            targets = []
+
+            d1_target = -1
+            d2_target = -1
+            d1_quad = -1
+            d2_quad = -1
+
+            generic_targets: List[Tuple[int, str]] = []
+            generic_quads: List[Tuple[int, str]] = []
 
             for obj in objs:
                 try:
                     alias = self.sim.getObjectAlias(obj)
                     alias_lower = alias.lower()
 
-                    if "target" in alias_lower:
-                        targets.append((obj, alias))
-                    elif any(k in alias_lower for k in ["quadcopter", "quadricopter", "drone", "hems"]):
-                        quads.append((obj, alias))
+                    # Filter targets
+                    if alias_lower == "target_drone1":
+                        d1_target = obj
+                    elif alias_lower in ("target_drone2", "target_peer", "target_hems"):
+                        d2_target = obj
+                    elif "target" in alias_lower:
+                        generic_targets.append((obj, alias))
+
+                    # Filter quadcopters
+                    if any(k in alias_lower for k in ["quadcopter", "quadricopter", "drone", "hems"]):
+                        if any(s in alias_lower for s in ["propeller", "joint", "respondable"]):
+                            continue
+                        if any(c in alias_lower for c in ["#", "peer", "hems", "2"]):
+                            if d2_quad == -1:
+                                d2_quad = obj
+                        else:
+                            if d1_quad == -1:
+                                d1_quad = obj
+                        generic_quads.append((obj, alias))
                 except Exception:
                     continue
 
-            logger.info("[CoppeliaZMQ] Scene scan discovered %d Quadcopter(s) and %d Target(s).", len(quads), len(targets))
+            # Fallbacks if specific aliases not present
+            if d1_target == -1 and len(generic_targets) >= 1:
+                d1_target = generic_targets[0][0]
+            if d2_target == -1 and len(generic_targets) >= 2:
+                d2_target = generic_targets[1][0]
 
-            # Resolve Drone 1
-            if len(quads) >= 1:
-                self.drone1["quad_handle"] = quads[0][0]
-                self.drone1["alias"] = quads[0][1]
-                self.quadcopter_handle = quads[0][0]
-                logger.info("[CoppeliaZMQ] Drone 1 bound to '%s' (Handle: %d)", quads[0][1], quads[0][0])
-            if len(targets) >= 1:
-                self.drone1["target_handle"] = targets[0][0]
-                self.target_handle = targets[0][0]
-                pos1 = self.sim.getObjectPosition(targets[0][0], -1)
-                self.drone1["current_pos"] = list(pos1)
-                self.drone1["goal_pos"] = list(pos1)
-                logger.info("[CoppeliaZMQ] Drone 1 target dummy bound to '%s' (Handle: %d, Pos: %s)", targets[0][1], targets[0][0], pos1)
+            if d1_quad == -1 and len(generic_quads) >= 1:
+                d1_quad = generic_quads[0][0]
+            if d2_quad == -1 and len(generic_quads) >= 2:
+                d2_quad = generic_quads[1][0]
 
-            # Resolve Drone 2
-            if len(quads) >= 2:
-                self.drone2["quad_handle"] = quads[1][0]
-                self.drone2["alias"] = quads[1][1]
-                logger.info("[CoppeliaZMQ] Drone 2 bound to '%s' (Handle: %d)", quads[1][1], quads[1][0])
-            if len(targets) >= 2:
-                self.drone2["target_handle"] = targets[1][0]
-                pos2 = self.sim.getObjectPosition(targets[1][0], -1)
-                self.drone2["current_pos"] = list(pos2)
-                self.drone2["goal_pos"] = list(pos2)
-                logger.info("[CoppeliaZMQ] Drone 2 target dummy bound to '%s' (Handle: %d, Pos: %s)", targets[1][1], targets[1][0], pos2)
-            elif len(quads) >= 2 and len(targets) == 1:
-                # Drone 2 exists but only 1 target dummy found -> create dedicated target dummy for Drone 2
-                try:
-                    d2_target = self.sim.createDummy(0.05)
-                    self.sim.setObjectAlias(d2_target, "target_drone2")
-                    self.sim.setObjectPosition(d2_target, -1, self.drone2["goal_pos"])
-                    self.drone2["target_handle"] = d2_target
-                    logger.info("[CoppeliaZMQ] Dynamically created target dummy for Drone 2 (Handle: %d)", d2_target)
-                except Exception as e:
-                    logger.warning("[CoppeliaZMQ] Could not create target dummy for Drone 2: %s", e)
+            with self.lock:
+                self.drone1["target_handle"] = d1_target
+                self.drone1["quad_handle"] = d1_quad
+                self.drone2["target_handle"] = d2_target
+                self.drone2["quad_handle"] = d2_quad
 
-            # Auto-spawn second Quadcopter model if only 1 exists
-            if len(quads) < 2 and not self._spawn_attempted:
-                self._spawn_attempted = True
-                model_cand = os.path.join(os.path.dirname(__file__), "..", "..", "coppeliasim", "Quadcopter.ttm")
-                model_cand = os.path.abspath(model_cand)
-                if os.path.exists(model_cand) and hasattr(self.sim, "loadModel"):
-                    try:
-                        h_new = self.sim.loadModel(model_cand)
-                        self.sim.setObjectPosition(h_new, -1, [1.2, 0.6, 2.6])
-                        self.sim.setObjectAlias(h_new, "Quadcopter_Peer")
-                        logger.info("[CoppeliaZMQ] Auto-loaded 2nd Quadcopter model from %s (Handle: %d)", model_cand, h_new)
-                        time.sleep(0.1)
-                        # Re-scan to bind handles
-                        self._resolve_scene_objects()
-                    except Exception as e:
-                        logger.debug("[CoppeliaZMQ] Auto-load model skipped: %s", e)
+                self.target_handle = d1_target
+                self.quadcopter_handle = d1_quad
+
+            logger.info(
+                "[CoppeliaZMQ] Scene paired -> Drone 1: Quad=%d, Target=%d | Drone 2: Quad=%d, Target=%d",
+                d1_quad, d1_target, d2_quad, d2_target
+            )
 
         except Exception as e:
             logger.debug("[CoppeliaZMQ] Scene resolution encountered error: %s", e)
@@ -323,25 +314,27 @@ class CoppeliaZMQBridge:
         """Start or resume CoppeliaSim simulation."""
         if not self.is_connected or not self.sim:
             return False
-        try:
-            self.sim.startSimulation()
-            logger.info("[CoppeliaZMQ] CoppeliaSim simulation started.")
-            return True
-        except Exception as e:
-            logger.error("[CoppeliaZMQ] Error starting simulation: %s", e)
-            return False
+        with self.zmq_lock:
+            try:
+                self.sim.startSimulation()
+                logger.info("[CoppeliaZMQ] CoppeliaSim simulation started.")
+                return True
+            except Exception as e:
+                logger.error("[CoppeliaZMQ] Error starting simulation: %s", e)
+                return False
 
     def stop_simulation(self) -> bool:
         """Stop CoppeliaSim simulation."""
         if not self.is_connected or not self.sim:
             return False
-        try:
-            self.sim.stopSimulation()
-            logger.info("[CoppeliaZMQ] CoppeliaSim simulation stopped.")
-            return True
-        except Exception as e:
-            logger.error("[CoppeliaZMQ] Error stopping simulation: %s", e)
-            return False
+        with self.zmq_lock:
+            try:
+                self.sim.stopSimulation()
+                logger.info("[CoppeliaZMQ] CoppeliaSim simulation stopped.")
+                return True
+            except Exception as e:
+                logger.error("[CoppeliaZMQ] Error stopping simulation: %s", e)
+                return False
 
     def set_target_altitude(self, target_z: float) -> bool:
         """Set Drone 1 goal altitude in CoppeliaSim (smooth trajectory)."""
@@ -388,7 +381,7 @@ class CoppeliaZMQBridge:
         # ----------------------------------------------------------------------
         if "EMERGENCY_DESCENT" in action or "EVACUATION" in action:
             with self.lock:
-                # Drone 1 yields right-of-way: smooth emergency descent to ground (0.05m)
+                # Drone 1 yields right-of-way: smooth emergency descent to ground deck (0.05m)
                 self.drone1["goal_pos"] = [0.0, 0.0, 0.05]
                 self.drone1["battery_soc"] = 21.5
                 self.drone1["status"] = "EMERGENCY_LANDING_CLEARING_FOR_HEMS"
@@ -396,7 +389,7 @@ class CoppeliaZMQBridge:
                 # Drone 2 acts as HEMS air ambulance: sweeps high overhead across the corridor
                 self.drone2["id"] = "HEMS_AIR_AMBULANCE"
                 self.drone2["role"] = "Manned Emergency Air Ambulance"
-                self.drone2["goal_pos"] = [-1.2, -0.8, 2.8]
+                self.drone2["goal_pos"] = [-1.0, -0.6, 2.80]
                 self.drone2["status"] = "HEMS_OVERFLIGHT_PRIORITY"
 
             result.update({
@@ -416,26 +409,26 @@ class CoppeliaZMQBridge:
                 self.drone1["battery_soc"] = 58.0
                 self.drone1["status"] = "5G_CELL_HANDOVER_DESCENT"
 
-                # Drone 2 holds station in adjacent corridor cell at 2.60m
+                # Drone 2 holds station in adjacent corridor cell at 2.40m
                 self.drone2["id"] = "UAS_PEER_209"
                 self.drone2["role"] = "Commercial Fleet Peer"
-                self.drone2["goal_pos"] = [1.2, 0.6, 2.60]
+                self.drone2["goal_pos"] = [1.2, 0.6, 2.40]
                 self.drone2["status"] = "HOLDING_SEPARATION"
 
             result.update({
                 "target_z": 1.50,
-                "description": "5G HANDOVER: Drone 1 smoothly descending to 1.5m for gNodeB LOS. Drone 2 maintaining 2.6m separation.",
+                "description": "5G HANDOVER: Drone 1 smoothly descending to 1.5m for gNodeB LOS. Drone 2 maintaining 2.4m separation.",
                 "actuated": True,
             })
-            logger.info("[CoppeliaZMQ] >>> SCENARIO 2: 5G HANDOVER -> Drone 1 (1.50m) | Drone 2 (2.60m) <<<")
+            logger.info("[CoppeliaZMQ] >>> SCENARIO 2: 5G HANDOVER -> Drone 1 (1.50m) | Drone 2 (2.40m) <<<")
 
         # ----------------------------------------------------------------------
         # Case 3: Tier 3 Critical Battery Diversion to Vertiport Pad 1
         # ----------------------------------------------------------------------
         elif "DIVERT" in action or "VERTIPORT" in action:
             with self.lock:
-                # Drone 1 diverts towards Vertiport Pad 1 (-1.8, 1.2, 0.8)
-                self.drone1["goal_pos"] = [-1.8, 1.2, 0.80]
+                # Drone 1 diverts towards Vertiport Pad 1 (-1.2, 0.8, 0.8) - within visible scene bounds
+                self.drone1["goal_pos"] = [-1.2, 0.8, 0.80]
                 self.drone1["battery_soc"] = 16.2
                 self.drone1["status"] = "DIVERTING_TO_VERTIPORT_PAD_1"
 
@@ -447,10 +440,10 @@ class CoppeliaZMQBridge:
 
             result.update({
                 "target_z": 0.80,
-                "description": "BATTERY DIVERT: Drone 1 navigating to Vertiport Pad 1 (-1.8, 1.2, 0.8m). Drone 2 holding corridor.",
+                "description": "BATTERY DIVERT: Drone 1 navigating to Vertiport Pad 1 (-1.2, 0.8, 0.8m). Drone 2 holding corridor.",
                 "actuated": True,
             })
-            logger.info("[CoppeliaZMQ] >>> SCENARIO 3: VERTIPORT DIVERT -> Drone 1 (-1.8, 1.2, 0.8m) | Drone 2 transit <<<")
+            logger.info("[CoppeliaZMQ] >>> SCENARIO 3: VERTIPORT DIVERT -> Drone 1 (-1.2, 0.8, 0.8m) | Drone 2 transit <<<")
 
         # ----------------------------------------------------------------------
         # Case 4: Nominal Corridor Cruise (Reset to nominal corridor station)
@@ -465,22 +458,22 @@ class CoppeliaZMQBridge:
                 # Drone 2 maintaining safe lateral & altitude separation
                 self.drone2["id"] = "UAS_PEER_209"
                 self.drone2["role"] = "Commercial Fleet Peer"
-                self.drone2["goal_pos"] = [1.2, 0.6, 2.60]
+                self.drone2["goal_pos"] = [1.2, 0.6, 2.40]
                 self.drone2["status"] = "HOLDING_SEPARATION"
 
             result.update({
                 "target_z": 2.00,
-                "description": "NOMINAL CRUISE: Drone 1 centered at 2.0m. Drone 2 maintaining corridor separation at 2.6m.",
+                "description": "NOMINAL CRUISE: Drone 1 centered at 2.0m. Drone 2 maintaining corridor separation at 2.4m.",
                 "actuated": True,
             })
-            logger.info("[CoppeliaZMQ] >>> SCENARIO 0: NOMINAL CRUISE -> Drone 1 (2.00m) | Drone 2 (2.60m) <<<")
+            logger.info("[CoppeliaZMQ] >>> SCENARIO 0: NOMINAL CRUISE -> Drone 1 (2.00m) | Drone 2 (2.40m) <<<")
 
         return result
 
     def read_telemetry(self) -> Dict[str, Any]:
-        """Poll telemetry from CoppeliaSim or return smooth simulated fleet telemetry."""
-        # Auto-reconnect attempt if disconnected (every 2.0 seconds)
-        if not self.is_connected and (time.time() - self._last_reconnect_try > 2.0):
+        """Poll telemetry from in-memory cache without contention."""
+        # Auto-reconnect attempt if disconnected (every 2.5 seconds)
+        if not self.is_connected and (time.time() - self._last_reconnect_try > 2.5):
             self._last_reconnect_try = time.time()
             self.connect()
 
@@ -534,3 +527,20 @@ class CoppeliaZMQBridge:
             }
 
             return telemetry
+
+
+# ------------------------------------------------------------------------------
+# Authoritative Singleton Accessor
+# ------------------------------------------------------------------------------
+_shared_bridge: Optional[CoppeliaZMQBridge] = None
+_bridge_lock = threading.Lock()
+
+
+def get_coppelia_bridge(host: str = "127.0.0.1", port: int = 23000) -> CoppeliaZMQBridge:
+    """Retrieve the authoritative CoppeliaZMQBridge singleton instance."""
+    global _shared_bridge
+    with _bridge_lock:
+        if _shared_bridge is None:
+            _shared_bridge = CoppeliaZMQBridge(host=host, port=port)
+            _shared_bridge.connect()
+        return _shared_bridge

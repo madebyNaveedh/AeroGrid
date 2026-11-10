@@ -25,39 +25,44 @@ function sysCall_init()
     maxParticleCount = 50
 
     -- 1. Detach manipulation target sphere to world coordinates:
+    local heliParent = sim.getObject('..', {noError = true})
+    local heliAlias = ""
+    if heliParent ~= -1 then heliAlias = string.lower(sim.getObjectAlias(heliParent)) end
+    local isDrone2 = string.find(heliAlias, "peer") or string.find(heliAlias, "hems") or string.find(heliAlias, "#") or string.find(heliAlias, "1") or string.find(heliAlias, "2")
+
     targetObj = -1
-    local candidateNames = {'../target', './target', ':target', '/target', '/Quadcopter/target'}
-    for _, name in ipairs(candidateNames) do
-        local h = sim.getObject(name, {noError = true})
-        if h and h ~= -1 then
-            targetObj = h
-            break
+    if isDrone2 then
+        local cands = {'../target', ':target_drone2', '/target_drone2', '../target#0', ':target#0', './target'}
+        for _, name in ipairs(cands) do
+            local h = sim.getObject(name, {noError = true})
+            if h and h ~= -1 then targetObj = h; break end
+        end
+    else
+        local cands = {'../target', ':target_drone1', '/target_drone1', ':target', '/target', './target'}
+        for _, name in ipairs(cands) do
+            local h = sim.getObject(name, {noError = true})
+            if h and h ~= -1 then targetObj = h; break end
         end
     end
 
     if targetObj ~= -1 then
         sim.setObjectParent(targetObj, -1, true)
-        local heliAlias = ""
-        local hParent = sim.getObject('..', {noError = true})
-        if hParent ~= -1 then heliAlias = string.lower(sim.getObjectAlias(hParent)) end
-        
-        local isDrone2 = string.find(heliAlias, "peer") or string.find(heliAlias, "hems") or string.find(heliAlias, "#") or string.find(heliAlias, "1")
         if isDrone2 then
             sim.setObjectAlias(targetObj, "target_drone2")
-            local pos = {1.2, 0.6, 2.6}
+            local pos = {1.2, 0.6, 2.4}
             sim.setObjectPosition(targetObj, -1, pos)
-            sim.addLog(sim.verbosity_scriptinfos, string.format("[AeroGrid] Drone 2 target dummy resolved (Handle: %d, Initial Pos: 1.2, 0.6, 2.6m)", targetObj))
+            sim.addLog(sim.verbosity_scriptinfos, string.format("[AeroGrid] Drone 2 target resolved (Handle: %d, Initial Pos: 1.2, 0.6, 2.4m)", targetObj))
         else
             sim.setObjectAlias(targetObj, "target_drone1")
             local pos = {0.0, 0.0, 2.0}
             sim.setObjectPosition(targetObj, -1, pos)
-            sim.addLog(sim.verbosity_scriptinfos, string.format("[AeroGrid] Drone 1 target dummy resolved (Handle: %d, Initial Z: %.2fm)", targetObj, pos[3]))
+            sim.addLog(sim.verbosity_scriptinfos, string.format("[AeroGrid] Drone 1 target resolved (Handle: %d, Initial Pos: 0.0, 0.0, 2.0m)", targetObj))
         end
     else
         sim.addLog(sim.verbosity_scripterrors, "[AeroGrid] WARNING: Could not find target dummy! Creating virtual target.")
         targetObj = sim.createDummy(0.05)
-        sim.setObjectAlias(targetObj, "target")
-        sim.setObjectPosition(targetObj, -1, {0.0, 0.0, 2.0})
+        sim.setObjectAlias(targetObj, isDrone2 and "target_drone2" or "target_drone1")
+        sim.setObjectPosition(targetObj, -1, isDrone2 and {1.2, 0.6, 2.4} or {0.0, 0.0, 2.0})
     end
 
     -- 2. Resolve body and propeller handles for PID dynamics
@@ -128,11 +133,22 @@ function sysCall_actuation()
     
     -- Vertical PID control:
     local targetPos = sim.getObjectPosition(targetObj, -1)
-    local l = sim.getVelocity(heli)
+    local l = {0, 0, 0}
+    if sim.getObjectVelocity then
+        local lin = sim.getObjectVelocity(d)
+        if lin then l = lin end
+    elseif sim.getVelocity then
+        local lin = sim.getVelocity(d)
+        if lin then l = lin end
+    end
+    if not l[3] then l[3] = 0 end
+
     local e = (targetPos[3] - pos[3])
-    cumul = cumul + e
+    cumul = math.max(-10, math.min(10, cumul + e))
     local pv = pParam * e
     local thrust = 5.45 + pv + iParam * cumul + dParam * (e - lastE) + l[3] * vParam
+    -- Clamp vertical thrust to physically reasonable range [0.5, 12.0]
+    thrust = math.max(0.5, math.min(12.0, thrust))
     lastE = e
     
     -- Horizontal PID control: 
@@ -158,6 +174,11 @@ function sysCall_actuation()
     local rotCorr = euler[3] * 0.1 + 2 * (euler[3] - prevEuler)
     prevEuler = euler[3]
     
+    -- CRUCIAL AERODYNAMIC STABILITY: Clamp differential thrust factors to prevent violent flipping
+    alphaCorr = math.max(-0.25, math.min(0.25, alphaCorr))
+    betaCorr = math.max(-0.25, math.min(0.25, betaCorr))
+    rotCorr = math.max(-0.20, math.min(0.20, rotCorr))
+
     -- Apply calculated thrust to the 4 propellers:
     handlePropeller(1, thrust * (1 - alphaCorr + betaCorr + rotCorr))
     handlePropeller(2, thrust * (1 - alphaCorr - betaCorr - rotCorr))
@@ -224,51 +245,5 @@ end
 -- Callback for ROS 2 /aerogrid/utm_commands
 function utm_command_callback(msg)
     local payload = msg.data
-    sim.addLog(sim.verbosity_scriptinfos, string.format("[AeroGrid] ROS 2 Command: %s", payload))
-
-    if targetObj == -1 then return end
-    local pos = sim.getObjectPosition(targetObj, -1)
-
-    local heliAlias = ""
-    local hParent = sim.getObject('..', {noError = true})
-    if hParent ~= -1 then heliAlias = string.lower(sim.getObjectAlias(hParent)) end
-    local isDrone2 = string.find(heliAlias, "peer") or string.find(heliAlias, "hems") or string.find(heliAlias, "#") or string.find(heliAlias, "1")
-
-    -- Drone 2 (HEMS / Peer Fleet) Maneuvers:
-    if isDrone2 then
-        if string.find(payload, "EMERGENCY_DESCENT") or string.find(payload, "EVACUATION") then
-            -- Manned HEMS sweeps across corridor overhead
-            sim.setObjectPosition(targetObj, -1, {-1.2, -0.8, 2.8})
-            sim.addLog(sim.verbosity_scriptinfos, "[AeroGrid] Action: HEMS OVERFLIGHT -> Cruising across corridor at 2.8m")
-        elseif string.find(payload, "DIVERT") or string.find(payload, "VERTIPORT") then
-            sim.setObjectPosition(targetObj, -1, {0.6, -0.4, 2.2})
-        else
-            sim.setObjectPosition(targetObj, -1, {1.2, 0.6, 2.6})
-        end
-        return
-    end
-
-    -- Drone 1 (Primary UAS Cargo) Maneuvers:
-    -- Case 1: HEMS Emergency Evacuation
-    if string.find(payload, "EMERGENCY_DESCENT_AND_CORRIDOR_EVACUATION") or string.find(payload, "EVACUATION") then
-        pos[3] = 0.05
-        sim.setObjectPosition(targetObj, -1, pos)
-        sim.addLog(sim.verbosity_scriptinfos, "[AeroGrid] Action: EMERGENCY EVACUATION -> Landing at 0.05m")
-
-    -- Case 2: 5G Shadowing Handover
-    elseif string.find(payload, "DESCEND_30M_AND_INITIATE_5G_CELL_HANDOVER") or string.find(payload, "5G_CELL_HANDOVER") then
-        pos[3] = 1.50
-        sim.setObjectPosition(targetObj, -1, pos)
-        sim.addLog(sim.verbosity_scriptinfos, string.format("[AeroGrid] Action: 5G HANDOVER -> Altitude adjusted to %.2fm", pos[3]))
-
-    -- Case 3: Battery Divert to Vertiport 1
-    elseif string.find(payload, "DIVERT") or string.find(payload, "VERTIPORT") then
-        sim.setObjectPosition(targetObj, -1, {-1.8, 1.2, 0.8})
-        sim.addLog(sim.verbosity_scriptinfos, "[AeroGrid] Action: BATTERY DIVERT -> Heading to Vertiport Pad 1 (-1.8, 1.2, 0.8)")
-
-    -- Case 4: Nominal Cruise
-    elseif string.find(payload, "MAINTAIN_ASSIGNED_AIRSPACE_CORRIDOR") or string.find(payload, "NOMINAL") then
-        sim.setObjectPosition(targetObj, -1, {0.0, 0.0, 2.0})
-        sim.addLog(sim.verbosity_scriptinfos, "[AeroGrid] Action: NOMINAL CRUISE -> Holding 2.0m hover")
-    end
+    sim.addLog(sim.verbosity_scriptinfos, string.format("[AeroGrid] ROS 2 UTM Command logged: %s", payload))
 end

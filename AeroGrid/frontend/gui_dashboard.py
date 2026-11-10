@@ -57,7 +57,7 @@ from backend.agents.aviation_agent import AviationAgent
 from backend.agents.telecom_agent import TelecomAgent
 from backend.agents.fleet_agent import FleetAgent
 from backend.agents.coordination_agent import CoordinationEngine
-from backend.simulation.coppelia_zmq_bridge import CoppeliaZMQBridge
+from backend.simulation.coppelia_zmq_bridge import CoppeliaZMQBridge, get_coppelia_bridge
 
 
 # ==============================================================================
@@ -262,9 +262,8 @@ class AeroGridTacticalHUD(QMainWindow):
         self.fleet_agent = FleetAgent(llm_client=None, retriever=self.retriever)
         self.coordination_engine = CoordinationEngine(audit_engine=self.audit_engine, retriever=self.retriever)
 
-        # ZeroMQ CoppeliaSim Bridge
-        self.zmq_bridge = CoppeliaZMQBridge()
-        self.zmq_bridge.connect()
+        # Authoritative Shared ZeroMQ CoppeliaSim Bridge
+        self.zmq_bridge = get_coppelia_bridge()
 
         self.current_scenario_idx = 0
         self._build_ui()
