@@ -110,3 +110,4 @@ Every semantic retrieval performed by a domain agent:
 2. Attaches the exact policy document name, page number, and chunk ID.
 3. Records the agent's confidence score and reasoning justification.
 4. Persists the decision record to the SQLite Write-Ahead Logging (`PRAGMA journal_mode=WAL`) audit trail with an immutable `event_id`.
+

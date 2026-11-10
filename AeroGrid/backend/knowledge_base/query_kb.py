@@ -14,14 +14,27 @@ import os
 import sys
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[3] if len(Path(__file__).resolve().parents) > 3 else Path(__file__).resolve().parent
+# Add py_packages to path
 curr = Path(__file__).resolve()
+candidates = [
+    curr.parent / "py_packages",
+    curr.parent.parent / "py_packages",
+    curr.parent.parent.parent / "py_packages",
+    curr.parent.parent.parent.parent / "py_packages",
+    Path("/home/mohammed/AIforGood/py_packages"),
+]
+for pkg in candidates:
+    if pkg.exists():
+        sys.path.insert(0, str(pkg))
+        break
+
 for parent in [curr.parent, curr.parent.parent, curr.parent.parent.parent, curr.parent.parent.parent.parent]:
-    pkg_dir = parent / "py_packages"
-    if pkg_dir.exists():
-        sys.path.insert(0, str(pkg_dir))
+    if (parent / "AeroGrid").exists():
         REPO_ROOT = parent
         break
+else:
+    REPO_ROOT = curr.parent
+
 sys.path.insert(0, str(REPO_ROOT))
 
 # Ensure offline huggingface cache usage
@@ -32,6 +45,8 @@ def query_kb(query_text: str, top_k: int = 3, collection_name: str = "uae_aviati
     persist_dir = REPO_ROOT / "AeroGrid" / "backend" / "knowledge_base" / "vector_db"
     if not persist_dir.exists():
         persist_dir = REPO_ROOT / "backend" / "knowledge_base" / "vector_db"
+    if not persist_dir.exists():
+        persist_dir = curr.parent / "vector_db"
 
     try:
         from langchain_chroma import Chroma

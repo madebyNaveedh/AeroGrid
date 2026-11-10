@@ -108,3 +108,4 @@
   > The complete codebase, vector Knowledge Base, 5-page Technical Report, CoppeliaSim digital twin bridge, and test suite are 100% open source and publicly accessible on GitHub at `madebyNaveedh/AeroGrid`.
   >
   > Thank you for your consideration, and we look forward to advancing autonomous aviation for the global good."*
+

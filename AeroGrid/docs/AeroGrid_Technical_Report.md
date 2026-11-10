@@ -127,3 +127,4 @@ Insurers request onboard video recordings from T1–T4 to investigate the landin
 8. **UAE Federal Decree-Law No. (45) of 2021:** *Protection of Personal Data (PDPL).* United Arab Emirates.
 9. **European Commission (2021):** *Commission Implementing Regulation (EU) 2021/664 on the regulatory framework for the U-space.*
 10. **3GPP (Releases 15–18):** *NR Support for Unmanned Aerial Vehicles (UAV).* 3rd Generation Partnership Project.
+
