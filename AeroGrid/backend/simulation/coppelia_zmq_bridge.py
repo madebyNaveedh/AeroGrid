@@ -98,10 +98,17 @@ class CoppeliaZMQBridge:
             return False
 
         import socket
-        try:
-            with socket.create_connection((self.host, self.port), timeout=0.25):
-                pass
-        except (socket.timeout, ConnectionRefusedError, OSError):
+        active_port = None
+        for cand_port in [self.port, 23000, 23001, 23002]:
+            try:
+                with socket.create_connection((self.host, cand_port), timeout=0.25):
+                    active_port = cand_port
+                    self.port = cand_port
+                    break
+            except (socket.timeout, ConnectionRefusedError, OSError):
+                continue
+
+        if not active_port:
             self.is_connected = False
             self.sim = None
             self.client = None
@@ -119,11 +126,11 @@ class CoppeliaZMQBridge:
             self.is_connected = True
             logger.info("[CoppeliaZMQ] Connected to CoppeliaSim ZMQ server at %s:%d (Sim time: %.2fs)", self.host, self.port, sim_time)
 
-            # Auto-start simulation if stopped
+            # Auto-start simulation if stopped or paused
             sim_state = self.sim.getSimulationState()
-            if sim_state == self.sim.simulation_stopped:
+            if sim_state != 17 and sim_state != 1:
                 self.sim.startSimulation()
-                logger.info("[CoppeliaZMQ] Simulation automatically started.")
+                logger.info("[CoppeliaZMQ] Simulation automatically started/unpaused (Initial state: %d).", sim_state)
 
             self._resolve_scene_objects()
             return True
@@ -249,7 +256,6 @@ class CoppeliaZMQBridge:
             if d1_target != -1:
                 self.target_handle = d1_target
                 try:
-                    self.sim.setObjectAlias(d1_target, "target_drone1")
                     pos = self.sim.getObjectPosition(self.target_handle, -1)
                     self.current_target_pos = list(pos)
                     logger.info("[CoppeliaZMQ] Located Drone 1 target handle: %d, Pos: %s", d1_target, pos)
@@ -263,7 +269,6 @@ class CoppeliaZMQBridge:
             if d2_target != -1:
                 self.target2_handle = d2_target
                 try:
-                    self.sim.setObjectAlias(d2_target, "target_drone2")
                     pos2 = self.sim.getObjectPosition(self.target2_handle, -1)
                     self.current_target2_pos = list(pos2)
                     logger.info("[CoppeliaZMQ] Located Drone 2 target handle: %d, Pos: %s", d2_target, pos2)

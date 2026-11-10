@@ -70,12 +70,15 @@ signal.signal(signal.SIGTERM, signal_handler)
 def check_and_start_coppelia(auto_start_sim: bool = False):
     """Check if CoppeliaSim is running; if not, optionally launch it."""
     import socket
-    try:
-        with socket.create_connection(("127.0.0.1", 23000), timeout=0.3):
-            logger.info("CoppeliaSim ZeroMQ server detected and reachable on port 23000.")
-            return
-    except (socket.timeout, ConnectionRefusedError, OSError):
-        logger.info("CoppeliaSim is not running on port 23000.")
+    for port in [23000, 23001, 23002]:
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=0.3):
+                logger.info("CoppeliaSim ZeroMQ server detected and reachable on port %d.", port)
+                return
+        except (socket.timeout, ConnectionRefusedError, OSError):
+            continue
+
+    logger.info("CoppeliaSim is not running on ports 23000-23002.")
 
     launcher_script = os.path.join(WORKSPACE_ROOT, "coppeliaSim.sh")
     if auto_start_sim and os.path.exists(launcher_script):
@@ -89,14 +92,15 @@ def check_and_start_coppelia(auto_start_sim: bool = False):
             )
             background_processes.append(proc)
             logger.info("Waiting for CoppeliaSim ZeroMQ server to initialize...")
-            for _ in range(20):
+            for _ in range(25):
                 time.sleep(0.5)
-                try:
-                    with socket.create_connection(("127.0.0.1", 23000), timeout=0.3):
-                        logger.info("CoppeliaSim ZMQ is ready!")
-                        break
-                except OSError:
-                    continue
+                for port in [23000, 23001, 23002]:
+                    try:
+                        with socket.create_connection(("127.0.0.1", port), timeout=0.3):
+                            logger.info("CoppeliaSim ZMQ is ready on port %d!", port)
+                            return
+                    except OSError:
+                        continue
         except Exception as e:
             logger.warning("Could not auto-launch CoppeliaSim: %s. You can start it manually via ./coppeliaSim.sh", e)
 
