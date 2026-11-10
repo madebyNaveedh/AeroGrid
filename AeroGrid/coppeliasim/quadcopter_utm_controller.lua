@@ -25,24 +25,25 @@ function sysCall_init()
     maxParticleCount = 50
 
     -- 1. Detach manipulation target sphere to world coordinates:
+    local selfObj = sim.getObject('.')
+    local selfAlias = string.lower(sim.getObjectAlias(selfObj))
     local heliParent = sim.getObject('..', {noError = true})
-    local heliAlias = ""
-    if heliParent ~= -1 then heliAlias = string.lower(sim.getObjectAlias(heliParent)) end
-    local isDrone2 = string.find(heliAlias, "peer") or string.find(heliAlias, "hems") or string.find(heliAlias, "#") or string.find(heliAlias, "1") or string.find(heliAlias, "2")
+    local parentAlias = ""
+    if heliParent ~= -1 then parentAlias = string.lower(sim.getObjectAlias(heliParent)) end
+
+    local isDrone2 = string.find(selfAlias, "peer") or string.find(selfAlias, "hems") or string.find(selfAlias, "#") or string.find(selfAlias, "2") or string.find(parentAlias, "peer") or string.find(parentAlias, "hems") or string.find(parentAlias, "#") or string.find(parentAlias, "2")
 
     targetObj = -1
+    local cands = {}
     if isDrone2 then
-        local cands = {'../target', ':target_drone2', '/target_drone2', '../target#0', ':target#0', './target'}
-        for _, name in ipairs(cands) do
-            local h = sim.getObject(name, {noError = true})
-            if h and h ~= -1 then targetObj = h; break end
-        end
+        cands = {'/target_drone2', ':target_drone2', '../target_drone2', './target', '../target', ':target#0', '/target'}
     else
-        local cands = {'../target', ':target_drone1', '/target_drone1', ':target', '/target', './target'}
-        for _, name in ipairs(cands) do
-            local h = sim.getObject(name, {noError = true})
-            if h and h ~= -1 then targetObj = h; break end
-        end
+        cands = {'/target_drone1', ':target_drone1', '../target_drone1', './target', '../target', ':target'}
+    end
+
+    for _, name in ipairs(cands) do
+        local h = sim.getObject(name, {noError = true})
+        if h and h ~= -1 then targetObj = h; break end
     end
 
     if targetObj ~= -1 then
@@ -66,8 +67,9 @@ function sysCall_init()
     end
 
     -- 2. Resolve body and propeller handles for PID dynamics
-    d = sim.getObject('../base', {noError = true})
-    if d == -1 then d = sim.getObject('.') end
+    d = sim.getObject('./base', {noError = true})
+    if d == -1 then d = sim.getObject('../base', {noError = true}) end
+    if d == -1 then d = selfObj end
 
     propellerHandles = {}
     jointHandles = {}
@@ -77,14 +79,19 @@ function sysCall_init()
         ttype = ttype + sim.particle_invisible
     end
     for i = 1, 4 do
-        propellerHandles[i] = sim.getObject('../propeller[' .. (i-1) .. ']/respondable', {noError = true})
-        jointHandles[i] = sim.getObject('../propeller[' .. (i-1) .. ']/joint', {noError = true})
+        local p = sim.getObject('./propeller[' .. (i-1) .. ']/respondable', {noError = true})
+        if p == -1 then p = sim.getObject('../propeller[' .. (i-1) .. ']/respondable', {noError = true}) end
+        propellerHandles[i] = p
+
+        local j = sim.getObject('./propeller[' .. (i-1) .. ']/joint', {noError = true})
+        if j == -1 then j = sim.getObject('../propeller[' .. (i-1) .. ']/joint', {noError = true}) end
+        jointHandles[i] = j
+
         if simulateParticles then
             particleObjects[i] = sim.addParticleObject(ttype, particleSize, particleDensity, {2, 1, 0.2, 3, 0.4}, particleLifeTime, maxParticleCount, {0.3, 0.7, 1})
         end
     end
-    heli = sim.getObject('..', {noError = true})
-    if heli == -1 then heli = sim.getObject('.') end
+    heli = selfObj
 
     pParam = 2
     iParam = 0
@@ -113,12 +120,14 @@ function sysCall_init()
 end
 
 function sysCall_cleanup() 
-    if shadowCont then
-        sim.removeDrawingObject(shadowCont)
+    if shadowCont and shadowCont ~= -1 then
+        pcall(function() sim.removeDrawingObject(shadowCont) end)
     end
-    for i = 1, #particleObjects do
-        if particleObjects[i] ~= -1 then
-            sim.removeParticleObject(particleObjects[i])
+    if particleObjects then
+        for i = 1, #particleObjects do
+            if particleObjects[i] and particleObjects[i] ~= -1 then
+                pcall(function() sim.removeParticleObject(particleObjects[i]) end)
+            end
         end
     end
 end 
