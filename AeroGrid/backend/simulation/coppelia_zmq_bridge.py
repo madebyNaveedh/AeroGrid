@@ -240,75 +240,147 @@ class CoppeliaZMQBridge:
                 return False
 
     def _resolve_scene_objects(self) -> None:
-        """Scan CoppeliaSim scene and accurately pair Drone 1 and Drone 2 with their target dummies."""
+        """Scan CoppeliaSim scene and ensure BOTH Drone 1 and Drone 2 exist and are paired."""
         if not self.sim:
             return
 
-        try:
-            objs = self.sim.getObjectsInTree(self.sim.handle_scene)
+        with self.zmq_lock:
+            try:
+                objs = self.sim.getObjectsInTree(self.sim.handle_scene)
 
-            d1_target = -1
-            d2_target = -1
-            d1_quad = -1
-            d2_quad = -1
+                # 1. Identify all quadcopter bodies/models and targets
+                quad_handles: List[Tuple[int, str]] = []
+                target_handles: List[Tuple[int, str]] = []
 
-            generic_targets: List[Tuple[int, str]] = []
-            generic_quads: List[Tuple[int, str]] = []
+                for obj in objs:
+                    try:
+                        alias = self.sim.getObjectAlias(obj)
+                        alias_lower = alias.lower()
 
-            for obj in objs:
-                try:
-                    alias = self.sim.getObjectAlias(obj)
-                    alias_lower = alias.lower()
+                        # Target dummy detection
+                        if "target" in alias_lower:
+                            target_handles.append((obj, alias))
 
-                    # Filter targets
-                    if alias_lower == "target_drone1":
-                        d1_target = obj
-                    elif alias_lower in ("target_drone2", "target_peer", "target_hems"):
-                        d2_target = obj
-                    elif "target" in alias_lower:
-                        generic_targets.append((obj, alias))
+                        # Quadcopter detection (exclude propeller shapes, joints, etc.)
+                        if any(k in alias_lower for k in ["quadcopter", "quadricopter", "drone", "hems"]):
+                            if any(s in alias_lower for s in ["propeller", "joint", "respondable", "shadow"]):
+                                continue
+                            quad_handles.append((obj, alias))
+                    except Exception:
+                        continue
 
-                    # Filter quadcopters
-                    if any(k in alias_lower for k in ["quadcopter", "quadricopter", "drone", "hems"]):
-                        if any(s in alias_lower for s in ["propeller", "joint", "respondable"]):
-                            continue
-                        if any(c in alias_lower for c in ["#", "peer", "hems", "2"]):
-                            if d2_quad == -1:
-                                d2_quad = obj
-                        else:
-                            if d1_quad == -1:
-                                d1_quad = obj
-                        generic_quads.append((obj, alias))
-                except Exception:
-                    continue
+                logger.info("[CoppeliaZMQ] Scene scan: found %d Quadcopter(s) and %d Target(s)", len(quad_handles), len(target_handles))
 
-            # Fallbacks if specific aliases not present
-            if d1_target == -1 and len(generic_targets) >= 1:
-                d1_target = generic_targets[0][0]
-            if d2_target == -1 and len(generic_targets) >= 2:
-                d2_target = generic_targets[1][0]
+                # 2. If fewer than 2 quadcopters exist, AUTO-SPAWN Drone 2 into CoppeliaSim!
+                if len(quad_handles) < 2 and not getattr(self, "_spawn_attempted", False):
+                    self._spawn_attempted = True
+                    model_path = ""
+                    for cand in [
+                        "/home/mohammed/CoppeliaSim/models/robots/mobile/Quadcopter.ttm",
+                        os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "coppeliasim", "Quadcopter.ttm")),
+                        os.path.expanduser("~/CoppeliaSim/models/robots/mobile/Quadcopter.ttm"),
+                    ]:
+                        if os.path.isfile(cand):
+                            model_path = cand
+                            break
 
-            if d1_quad == -1 and len(generic_quads) >= 1:
-                d1_quad = generic_quads[0][0]
-            if d2_quad == -1 and len(generic_quads) >= 2:
-                d2_quad = generic_quads[1][0]
+                    if model_path and hasattr(self.sim, "loadModel"):
+                        try:
+                            # Load second Quadcopter model
+                            h2 = self.sim.loadModel(model_path)
+                            self.sim.setObjectAlias(h2, "Quadcopter_Peer")
+                            self.sim.setObjectPosition(h2, -1, [1.2, 0.6, 2.4])
+                            logger.info("[CoppeliaZMQ] Auto-spawned Drone 2 (Handle: %d) from %s at [1.2, 0.6, 2.4]", h2, model_path)
+                            time.sleep(0.15)
 
-            with self.lock:
-                self.drone1["target_handle"] = d1_target
-                self.drone1["quad_handle"] = d1_quad
-                self.drone2["target_handle"] = d2_target
-                self.drone2["quad_handle"] = d2_quad
+                            # Re-fetch scene objects to pair handles
+                            objs = self.sim.getObjectsInTree(self.sim.handle_scene)
+                            quad_handles.clear()
+                            target_handles.clear()
+                            for obj in objs:
+                                try:
+                                    alias = self.sim.getObjectAlias(obj)
+                                    alias_lower = alias.lower()
+                                    if "target" in alias_lower:
+                                        target_handles.append((obj, alias))
+                                    if any(k in alias_lower for k in ["quadcopter", "quadricopter", "drone", "hems"]):
+                                        if any(s in alias_lower for s in ["propeller", "joint", "respondable", "shadow"]):
+                                            continue
+                                        quad_handles.append((obj, alias))
+                                except Exception:
+                                    continue
+                        except Exception as e:
+                            logger.warning("[CoppeliaZMQ] Failed to auto-spawn Drone 2: %s", e)
 
-                self.target_handle = d1_target
-                self.quadcopter_handle = d1_quad
+                # 3. Match Drone 1 and Drone 2
+                d1_q = -1
+                d2_q = -1
+                d1_t = -1
+                d2_t = -1
 
-            logger.info(
-                "[CoppeliaZMQ] Scene paired -> Drone 1: Quad=%d, Target=%d | Drone 2: Quad=%d, Target=%d",
-                d1_quad, d1_target, d2_quad, d2_target
-            )
+                # Prioritize alias matching
+                for obj, alias in target_handles:
+                    al = alias.lower()
+                    if any(c in al for c in ["drone2", "peer", "hems", "#", "1"]):
+                        if d2_t == -1:
+                            d2_t = obj
+                    else:
+                        if d1_t == -1:
+                            d1_t = obj
 
-        except Exception as e:
-            logger.debug("[CoppeliaZMQ] Scene resolution encountered error: %s", e)
+                for obj, alias in quad_handles:
+                    al = alias.lower()
+                    if any(c in al for c in ["peer", "hems", "#", "1", "2"]):
+                        if d2_q == -1:
+                            d2_q = obj
+                    else:
+                        if d1_q == -1:
+                            d1_q = obj
+
+                # Fallback to index assignment
+                if d1_q == -1 and len(quad_handles) >= 1:
+                    d1_q = quad_handles[0][0]
+                if d2_q == -1 and len(quad_handles) >= 2:
+                    d2_q = quad_handles[1][0]
+
+                if d1_t == -1 and len(target_handles) >= 1:
+                    d1_t = target_handles[0][0]
+                if d2_t == -1 and len(target_handles) >= 2:
+                    d2_t = target_handles[1][0]
+
+                # If Drone 2 exists but no target dummy was found -> create one!
+                if d2_q != -1 and d2_t == -1:
+                    try:
+                        d2_t = self.sim.createDummy(0.05)
+                        self.sim.setObjectAlias(d2_t, "target_drone2")
+                        self.sim.setObjectPosition(d2_t, -1, [1.2, 0.6, 2.4])
+                        logger.info("[CoppeliaZMQ] Created target dummy for Drone 2 (Handle: %d)", d2_t)
+                    except Exception as e:
+                        logger.warning("[CoppeliaZMQ] Could not create dummy for Drone 2: %s", e)
+
+                # Store paired handles
+                with self.lock:
+                    self.drone1["quad_handle"] = d1_q
+                    self.drone1["target_handle"] = d1_t
+                    self.drone2["quad_handle"] = d2_q
+                    self.drone2["target_handle"] = d2_t
+
+                    self.quadcopter_handle = d1_q
+                    self.target_handle = d1_t
+
+                # Ensure initial target dummy positions are set in CoppeliaSim
+                if d1_t != -1:
+                    self.sim.setObjectPosition(d1_t, -1, self.drone1["current_pos"])
+                if d2_t != -1:
+                    self.sim.setObjectPosition(d2_t, -1, self.drone2["current_pos"])
+
+                logger.info(
+                    "[CoppeliaZMQ] Fleet Paired -> Drone 1: Quad=%d, Target=%d | Drone 2: Quad=%d, Target=%d",
+                    d1_q, d1_t, d2_q, d2_t
+                )
+
+            except Exception as e:
+                logger.debug("[CoppeliaZMQ] Scene resolution encountered error: %s", e)
 
     def start_simulation(self) -> bool:
         """Start or resume CoppeliaSim simulation."""
