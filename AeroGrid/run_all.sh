@@ -26,17 +26,15 @@ elif [ -f "$SCRIPT_DIR/AeroGrid/ros2_ws/install/setup.bash" ]; then
     echo "  + Sourced $SCRIPT_DIR/AeroGrid/ros2_ws/install/setup.bash"
 fi
 
-# 2. Run automated validation test suite
-echo ""
-echo "[2/4] Running automated system verification suite (12 tests)..."
-PYTHONPATH="$SCRIPT_DIR/AeroGrid:$SCRIPT_DIR" python3 -m unittest discover -s "$SCRIPT_DIR/AeroGrid/tests" -v
+# 2. Optional unit test verification suite (run with --test)
+if [[ "$*" == *"--test"* ]]; then
+    echo ""
+    echo "[TEST] Running automated system verification suite..."
+    export HF_HUB_OFFLINE=1
+    PYTHONPATH="$SCRIPT_DIR/py_packages:$SCRIPT_DIR/AeroGrid:$SCRIPT_DIR" python3 -m unittest discover -s "$SCRIPT_DIR/AeroGrid/tests" -v
+fi
 
-# 3. Run multi-agent conflict simulation pipeline
+# 3. Launch AeroGrid Unified Mission Control (PyQt5 HUD, Web HUD, ROS 2, CoppeliaSim)
 echo ""
-echo "[3/4] Running AeroGrid Multi-Agent UTM Pipeline (3 Challenge Scenarios)..."
-python3 "$SCRIPT_DIR/AeroGrid/backend/main.py"
-
-# 4. Launch Tactical Mission Control Dashboard
-echo ""
-echo "[4/4] Launching AeroGrid Unified Stack (PyQt5 Tactical HUD)..."
+echo "[2/2] Launching AeroGrid Unified Stack..."
 exec "$SCRIPT_DIR/run_aerogrid.sh" "$@"

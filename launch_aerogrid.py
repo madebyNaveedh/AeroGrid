@@ -138,7 +138,8 @@ def start_ros2_publisher_thread():
 
 def main():
     parser = argparse.ArgumentParser(description="AeroGrid Unified Multi-Agent UTM Launcher")
-    parser.add_argument("--coppelia", action="store_true", help="Auto-launch CoppeliaSim GUI if not already running")
+    parser.add_argument("--coppelia", action="store_true", default=True, help="Auto-launch CoppeliaSim GUI if not already running (default: enabled)")
+    parser.add_argument("--no-coppelia", action="store_true", help="Do not attempt to auto-launch CoppeliaSim")
     parser.add_argument("--no-ros", action="store_true", help="Disable embedded ROS 2 publisher")
     args = parser.parse_args()
 
@@ -154,8 +155,9 @@ def main():
                 logger.info("Auto-detected active X11 display: %s", cand)
                 break
 
-    # 1. Check or start CoppeliaSim
-    check_and_start_coppelia(auto_start_sim=args.coppelia)
+    # 1. Check or start CoppeliaSim (auto-start enabled by default unless --no-coppelia)
+    should_auto_coppelia = not args.no_coppelia
+    check_and_start_coppelia(auto_start_sim=should_auto_coppelia)
 
     # 2. Start Web Mission Control HUD Server
     start_web_server_thread(port=8080)

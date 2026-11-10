@@ -659,9 +659,11 @@ class AeroGridTacticalHUD(QMainWindow):
         self.radar.update_fleet_telemetry(telem)
         if telem.get("drone1"):
             z1 = telem["drone1"].get("z", 2.0)
-            self.t_alt.findChild(QLabel, "telemVal").setText(f"{z1:.2f}m")
+            if hasattr(self.t_alt, "val_lbl"):
+                self.t_alt.val_lbl.setText(f"{z1:.2f}m")
             soc1 = telem["drone1"].get("battery_soc", 82.0)
-            self.t_soc.findChild(QLabel, "telemVal").setText(f"{soc1:.1f}%")
+            if hasattr(self.t_soc, "val_lbl"):
+                self.t_soc.val_lbl.setText(f"{soc1:.1f}%")
 
     def _apply_theme(self):
         self.setStyleSheet("""

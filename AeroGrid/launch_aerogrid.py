@@ -101,6 +101,20 @@ def check_and_start_coppelia(auto_start_sim: bool = False):
             logger.warning("Could not auto-launch CoppeliaSim: %s. You can start it manually via ./coppeliaSim.sh", e)
 
 
+def start_web_server_thread(port: int = 8080):
+    """Start the AeroGrid Web HUD server in a background daemon thread."""
+    def _server_worker():
+        try:
+            from backend.server import run_server
+            run_server(port=port)
+        except Exception as e:
+            logger.debug("Web server error: %s", e)
+
+    t = threading.Thread(target=_server_worker, daemon=True)
+    t.start()
+    logger.info("Web Mission Control HUD accessible at: http://localhost:%d", port)
+
+
 def start_ros2_publisher_thread():
     """Start the ROS 2 UTM command publisher in a background daemon thread."""
     def _ros2_worker():
@@ -124,7 +138,8 @@ def start_ros2_publisher_thread():
 
 def main():
     parser = argparse.ArgumentParser(description="AeroGrid Unified Multi-Agent UTM Launcher")
-    parser.add_argument("--coppelia", action="store_true", help="Auto-launch CoppeliaSim GUI if not already running")
+    parser.add_argument("--coppelia", action="store_true", default=True, help="Auto-launch CoppeliaSim GUI if not already running (default: enabled)")
+    parser.add_argument("--no-coppelia", action="store_true", help="Do not attempt to auto-launch CoppeliaSim")
     parser.add_argument("--no-ros", action="store_true", help="Disable embedded ROS 2 publisher")
     args = parser.parse_args()
 
@@ -132,24 +147,51 @@ def main():
     print("  AEROGRID UTM - UNIFIED MULTI-AGENT LAUNCHER (ITU AI FOR GOOD)")
     print("=" * 80)
 
-    # 1. Check or start CoppeliaSim
-    check_and_start_coppelia(auto_start_sim=args.coppelia)
+    # Auto-detect active X11 display if unset
+    if not os.environ.get("DISPLAY"):
+        for cand in [":1", ":0"]:
+            if os.path.exists(f"/tmp/.X11-unix/X{cand[1:]}"):
+                os.environ["DISPLAY"] = cand
+                logger.info("Auto-detected active X11 display: %s", cand)
+                break
 
-    # 2. Start ROS 2 Publisher
+    # 1. Check or start CoppeliaSim (auto-start enabled by default unless --no-coppelia)
+    should_auto_coppelia = not args.no_coppelia
+    check_and_start_coppelia(auto_start_sim=should_auto_coppelia)
+
+    # 2. Start Web Mission Control HUD Server
+    start_web_server_thread(port=8080)
+
+    # 3. Start ROS 2 Publisher
     if not args.no_ros:
         start_ros2_publisher_thread()
 
-    # 3. Launch PyQt5 Tactical Mission Control Dashboard
-    logger.info("Launching Native PyQt5 Tactical Mission Control Dashboard...")
-    from PyQt5.QtWidgets import QApplication
-    from AeroGrid.frontend.gui_dashboard import AeroGridTacticalHUD
+    print("\n" + "=" * 80)
+    print("  AEROGRID MISSION CONTROL HUD - ACCESS CHANNELS:")
+    print("  * WEB GLASS COCKPIT HUD: http://localhost:8080  (or http://127.0.0.1:8080)")
+    print(f"  * NATIVE DESKTOP HUD:    Active on Display {os.environ.get('DISPLAY', 'None')}")
+    print("=" * 80 + "\n")
 
-    app = QApplication.instance() or QApplication(sys.argv)
-    hud = AeroGridTacticalHUD()
-    hud.show()
+    # 4. Launch PyQt5 Tactical Mission Control Dashboard
+    try:
+        logger.info("Launching Native PyQt5 Tactical Mission Control Dashboard on %s...", os.environ.get("DISPLAY"))
+        from PyQt5.QtWidgets import QApplication
+        from AeroGrid.frontend.gui_dashboard import AeroGridTacticalHUD
 
-    logger.info("AeroGrid Tactical Mission Control is live!")
-    sys.exit(app.exec_())
+        app = QApplication.instance() or QApplication(sys.argv)
+        hud = AeroGridTacticalHUD()
+        hud.show()
+
+        logger.info("AeroGrid Tactical Mission Control is live!")
+        sys.exit(app.exec_())
+    except Exception as e:
+        logger.warning("Could not launch native desktop GUI window (%s).", e)
+        logger.info("Serving Web Mission Control HUD in foreground at http://localhost:8080")
+        try:
+            while True:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            pass
 
 
 if __name__ == "__main__":

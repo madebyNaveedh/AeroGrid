@@ -31,19 +31,28 @@ CANDIDATE_DIRS=(
     "$HOME/CoppeliaSim"
     "$HOME/Downloads/CoppeliaSim_Edu_V4_10_0_rev0_Ubuntu22_04"
     "$HOME/Downloads/CoppeliaSim_Edu_V4_7_0_rev4_Ubuntu22_04"
+    "$HOME/Downloads/CoppeliaSim_Edu_V4_6_0_rev0_Ubuntu22_04"
     "/opt/CoppeliaSim"
 )
 
 COPPELIA_DIR=""
 for dir in "${CANDIDATE_DIRS[@]}"; do
-    if [ -x "$dir/coppeliaSim" ]; then
+    if [ -x "$dir/coppeliaSim" ] || [ -x "$dir/coppeliaSim.sh" ]; then
         COPPELIA_DIR="$dir"
         break
     fi
 done
 
 if [ -z "$COPPELIA_DIR" ]; then
+    AUTO_BIN=$(find "$HOME" "/opt" -maxdepth 3 -name "coppeliaSim" -type f 2>/dev/null | head -n 1)
+    if [ -n "$AUTO_BIN" ]; then
+        COPPELIA_DIR="$(dirname "$AUTO_BIN")"
+    fi
+fi
+
+if [ -z "$COPPELIA_DIR" ]; then
     echo "[ERROR] CoppeliaSim binary not found in standard directories: ${CANDIDATE_DIRS[*]}"
+    echo "Please ensure CoppeliaSim is unpacked in ~/CoppeliaSim or ~/Downloads."
     exit 1
 fi
 
