@@ -106,46 +106,52 @@ class CoppeliaZMQBridge:
         if not self.sim:
             return
 
-        # 1. Search for Quadcopter body handle
-        quad_candidates = [
-            "/Quadcopter",
-            "/Quadcopter[0]",
-            ":Quadcopter",
-            "Quadcopter",
-            "/Quadricopter",
-        ]
-        for cand in quad_candidates:
-            try:
-                handle = self.sim.getObject(cand, {"noError": True})
-                if handle and handle != -1:
-                    self.quadcopter_handle = handle
-                    logger.info("[CoppeliaZMQ] Located Quadcopter body '%s' (Handle: %d)", cand, handle)
-                    break
-            except Exception:
-                continue
+        # 1. Scan all objects in scene by alias
+        try:
+            objs = self.sim.getObjectsInTree(self.sim.handle_scene)
+            for obj in objs:
+                try:
+                    alias = self.sim.getObjectAlias(obj)
+                    alias_lower = alias.lower()
+                    if self.target_handle == -1 and ("target" in alias_lower):
+                        self.target_handle = obj
+                        pos = self.sim.getObjectPosition(self.target_handle, -1)
+                        self.current_target_pos = list(pos)
+                        self.goal_target_pos = list(pos)
+                        logger.info("[CoppeliaZMQ] Located target dummy '%s' (Handle: %d, Pos: %s)", alias, obj, pos)
+                    if self.quadcopter_handle == -1 and ("quadcopter" in alias_lower or "quadricopter" in alias_lower or "drone" in alias_lower):
+                        self.quadcopter_handle = obj
+                        logger.info("[CoppeliaZMQ] Located Quadcopter body '%s' (Handle: %d)", alias, obj)
+                except Exception:
+                    continue
+        except Exception as e:
+            logger.debug("[CoppeliaZMQ] Object tree scan failed: %s", e)
 
-        # 2. Search for target dummy handle
-        target_candidates = [
-            "/Quadcopter/target",
-            "/Quadcopter[0]/target",
-            "/Quadcopter_target",
-            "/target",
-            ":target",
-            "Quadcopter_target",
-            "target",
-        ]
-        for cand in target_candidates:
-            try:
-                handle = self.sim.getObject(cand, {"noError": True})
-                if handle and handle != -1:
-                    self.target_handle = handle
-                    pos = self.sim.getObjectPosition(self.target_handle, -1)
-                    self.current_target_pos = list(pos)
-                    self.goal_target_pos = list(pos)
-                    logger.info("[CoppeliaZMQ] Located target dummy '%s' (Handle: %d, Pos: %s)", cand, handle, pos)
-                    break
-            except Exception:
-                continue
+        # 2. Check candidate names if not found by tree scan
+        if self.quadcopter_handle == -1:
+            for cand in ["/Quadcopter", "/Quadcopter[0]", "Quadcopter", "/Quadricopter"]:
+                try:
+                    h = self.sim.getObject(cand, {"noError": True})
+                    if h and h != -1:
+                        self.quadcopter_handle = h
+                        logger.info("[CoppeliaZMQ] Located Quadcopter body '%s' (Handle: %d)", cand, h)
+                        break
+                except Exception:
+                    pass
+
+        if self.target_handle == -1:
+            for cand in ["/target", "/Quadcopter/target", "target", "Quadcopter_target", ":target"]:
+                try:
+                    h = self.sim.getObject(cand, {"noError": True})
+                    if h and h != -1:
+                        self.target_handle = h
+                        pos = self.sim.getObjectPosition(self.target_handle, -1)
+                        self.current_target_pos = list(pos)
+                        self.goal_target_pos = list(pos)
+                        logger.info("[CoppeliaZMQ] Located target dummy '%s' (Handle: %d, Pos: %s)", cand, h, pos)
+                        break
+                except Exception:
+                    pass
 
     def start_simulation(self) -> bool:
         """Start or resume CoppeliaSim simulation."""
@@ -193,6 +199,11 @@ class CoppeliaZMQBridge:
 
     def read_telemetry(self) -> Dict[str, Any]:
         """Poll current telemetry from CoppeliaSim or generate simulated telemetry."""
+        # Auto-reconnect attempt if disconnected (every 2.0 seconds)
+        if not self.is_connected and (time.time() - getattr(self, "_last_reconnect_try", 0) > 2.0):
+            self._last_reconnect_try = time.time()
+            self.connect()
+
         if self.is_connected and self.sim:
             try:
                 self._step_smooth_trajectory()
@@ -240,9 +251,42 @@ class CoppeliaZMQBridge:
         return True
 
     def set_target_position(self, x: float, y: float, z: float) -> bool:
-        """Set full 3D goal coordinates in CoppeliaSim (smooth trajectory)."""
+        """Set full 3D goal coordinates in CoppeliaSim."""
         self.goal_target_pos = [float(x), float(y), max(0.05, float(z))]
-        logger.info("[CoppeliaZMQ] Setting goal 3D setpoint to %s (Smooth glide)", self.goal_target_pos)
+        logger.info("[CoppeliaZMQ] Setting goal 3D setpoint to %s", self.goal_target_pos)
+
+        # 1. Auto-connect if not connected
+        if not self.is_connected or not self.sim:
+            self.connect()
+
+        # 2. Actuate directly if connected
+        if self.is_connected and self.sim:
+            try:
+                # Auto-start simulation if stopped
+                sim_state = self.sim.getSimulationState()
+                if sim_state == self.sim.simulation_stopped:
+                    self.sim.startSimulation()
+                    logger.info("[CoppeliaZMQ] Started CoppeliaSim simulation automatically.")
+
+                # Resolve handles if not yet found
+                if self.target_handle == -1:
+                    self._resolve_scene_objects()
+
+                # Actuate target dummy
+                if self.target_handle != -1:
+                    self.sim.setObjectPosition(self.target_handle, -1, self.goal_target_pos)
+                    self.current_target_pos = list(self.goal_target_pos)
+                    logger.info("[CoppeliaZMQ] Moved target dummy (Handle: %d) to %s", self.target_handle, self.goal_target_pos)
+                    return True
+                elif self.quadcopter_handle != -1:
+                    # Fallback: move quadcopter directly if no target dummy
+                    self.sim.setObjectPosition(self.quadcopter_handle, -1, self.goal_target_pos)
+                    self.current_target_pos = list(self.goal_target_pos)
+                    logger.info("[CoppeliaZMQ] Moved Quadcopter directly (Handle: %d) to %s", self.quadcopter_handle, self.goal_target_pos)
+                    return True
+            except Exception as e:
+                logger.warning("[CoppeliaZMQ] Failed to set position in CoppeliaSim: %s", e)
+
         return True
 
     def execute_utm_action(self, action: str, target_drone_id: str = "UAS_CARGO_DXB_104") -> Dict[str, Any]:
