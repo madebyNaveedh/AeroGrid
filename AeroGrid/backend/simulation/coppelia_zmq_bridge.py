@@ -135,7 +135,10 @@ class CoppeliaZMQBridge:
             return False
 
     def _resolve_scene_objects(self) -> None:
-        """Locate Quadcopter and target dummy handles in active CoppeliaSim scene."""
+        """Locate Quadcopter and target dummy handles in active CoppeliaSim scene.
+        
+        If the scene is empty or missing Drone 2, automatically loads models into CoppeliaSim.
+        """
         if not self.sim:
             return
 
@@ -157,25 +160,115 @@ class CoppeliaZMQBridge:
                 except Exception:
                     continue
 
-            # Assign Drone 1
-            if len(quads) >= 1:
-                self.quadcopter_handle = quads[0][0]
-                logger.info("[CoppeliaZMQ] Located Drone 1 Quadcopter '%s' (Handle: %d)", quads[0][1], quads[0][0])
-            if len(targets) >= 1:
-                self.target_handle = targets[0][0]
-                pos = self.sim.getObjectPosition(self.target_handle, -1)
-                self.current_target_pos = list(pos)
-                logger.info("[CoppeliaZMQ] Located Drone 1 target '%s' (Handle: %d, Pos: %s)", targets[0][1], targets[0][0], pos)
+            # Model path resolution for auto-spawning
+            model_cand = [
+                os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "coppeliasim", "Quadcopter.ttm")),
+                "/home/mohammed/AIforGood/AeroGrid/coppeliasim/Quadcopter.ttm",
+                "/home/mohammed/CoppeliaSim/models/robots/mobile/Quadcopter.ttm",
+            ]
+            model_path = next((p for p in model_cand if os.path.isfile(p)), None)
 
-            # Assign Drone 2 if present
-            if len(quads) >= 2:
-                self.quad2_handle = quads[1][0]
-                logger.info("[CoppeliaZMQ] Located Drone 2 Quadcopter '%s' (Handle: %d)", quads[1][1], quads[1][0])
-            if len(targets) >= 2:
-                self.target2_handle = targets[1][0]
-                pos2 = self.sim.getObjectPosition(self.target2_handle, -1)
-                self.current_target2_pos = list(pos2)
-                logger.info("[CoppeliaZMQ] Located Drone 2 target '%s' (Handle: %d, Pos: %s)", targets[1][1], targets[1][0], pos2)
+            # Auto-spawn if scene has missing drones and model file exists
+            if model_path and hasattr(self.sim, "loadModel"):
+                # If scene is completely empty, load Drone 1
+                if len(quads) == 0:
+                    try:
+                        logger.info("[CoppeliaZMQ] Scene empty. Auto-spawning Drone 1 (Quadcopter) at [0, 0, 2.0]...")
+                        h1 = self.sim.loadModel(model_path)
+                        self.sim.setObjectAlias(h1, "Quadcopter")
+                        self.sim.setObjectPosition(h1, -1, [0.0, 0.0, 2.0])
+                    except Exception as e:
+                        logger.warning("[CoppeliaZMQ] Drone 1 auto-spawn error: %s", e)
+
+                # If only 1 drone exists in scene, load Drone 2 (Peer / HEMS)
+                if len(quads) <= 1:
+                    try:
+                        logger.info("[CoppeliaZMQ] Auto-spawning Drone 2 (Quadcopter_Peer) at [1.2, 0.6, 2.4]...")
+                        h2 = self.sim.loadModel(model_path)
+                        self.sim.setObjectAlias(h2, "Quadcopter_Peer")
+                        self.sim.setObjectPosition(h2, -1, [1.2, 0.6, 2.4])
+                    except Exception as e:
+                        logger.warning("[CoppeliaZMQ] Drone 2 auto-spawn error: %s", e)
+
+                # Re-scan scene after loading
+                objs = self.sim.getObjectsInTree(self.sim.handle_scene)
+                quads.clear()
+                targets.clear()
+                for obj in objs:
+                    try:
+                        alias = self.sim.getObjectAlias(obj)
+                        alias_lower = alias.lower()
+                        if "target" in alias_lower:
+                            targets.append((obj, alias))
+                        elif any(k in alias_lower for k in ["quadcopter", "quadricopter", "drone", "hems"]):
+                            if any(s in alias_lower for s in ["propeller", "joint", "respondable", "shadow"]):
+                                continue
+                            quads.append((obj, alias))
+                    except Exception:
+                        continue
+
+            # Prioritize specific aliases
+            d1_quad = -1
+            d2_quad = -1
+            d1_target = -1
+            d2_target = -1
+
+            for obj, alias in quads:
+                al = alias.lower()
+                if "peer" in al or "hems" in al or "#" in al or "2" in al:
+                    if d2_quad == -1:
+                        d2_quad = obj
+                else:
+                    if d1_quad == -1:
+                        d1_quad = obj
+
+            for obj, alias in targets:
+                al = alias.lower()
+                if "drone2" in al or "peer" in al or "hems" in al or "#" in al or "2" in al:
+                    if d2_target == -1:
+                        d2_target = obj
+                elif "drone1" in al or "1" in al:
+                    if d1_target == -1:
+                        d1_target = obj
+
+            # Fallbacks to positional indices
+            if d1_quad == -1 and len(quads) >= 1:
+                d1_quad = quads[0][0]
+            if d2_quad == -1 and len(quads) >= 2:
+                d2_quad = quads[1][0] if quads[1][0] != d1_quad else (quads[0][0] if len(quads) > 1 else -1)
+
+            if d1_target == -1 and len(targets) >= 1:
+                d1_target = targets[0][0]
+            if d2_target == -1 and len(targets) >= 2:
+                d2_target = targets[1][0] if targets[1][0] != d1_target else -1
+
+            # Assign Drone 1 handles
+            if d1_quad != -1:
+                self.quadcopter_handle = d1_quad
+                logger.info("[CoppeliaZMQ] Located Drone 1 Quadcopter handle: %d", d1_quad)
+            if d1_target != -1:
+                self.target_handle = d1_target
+                try:
+                    self.sim.setObjectAlias(d1_target, "target_drone1")
+                    pos = self.sim.getObjectPosition(self.target_handle, -1)
+                    self.current_target_pos = list(pos)
+                    logger.info("[CoppeliaZMQ] Located Drone 1 target handle: %d, Pos: %s", d1_target, pos)
+                except Exception:
+                    pass
+
+            # Assign Drone 2 handles
+            if d2_quad != -1:
+                self.quad2_handle = d2_quad
+                logger.info("[CoppeliaZMQ] Located Drone 2 Quadcopter handle: %d", d2_quad)
+            if d2_target != -1:
+                self.target2_handle = d2_target
+                try:
+                    self.sim.setObjectAlias(d2_target, "target_drone2")
+                    pos2 = self.sim.getObjectPosition(self.target2_handle, -1)
+                    self.current_target2_pos = list(pos2)
+                    logger.info("[CoppeliaZMQ] Located Drone 2 target handle: %d, Pos: %s", d2_target, pos2)
+                except Exception:
+                    pass
 
         except Exception as e:
             logger.debug("[CoppeliaZMQ] Error resolving scene objects: %s", e)

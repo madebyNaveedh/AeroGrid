@@ -56,8 +56,19 @@ if [ -z "$COPPELIA_DIR" ]; then
     exit 1
 fi
 
+# 4. Load AeroGrid default scene if no scene argument provided
+DEFAULT_SCENE="$WORKSPACE_DIR/AeroGrid/coppeliasim/AeroGrid_Dubai_SkyDome.ttt"
+if [ ! -f "$DEFAULT_SCENE" ]; then
+    DEFAULT_SCENE="$WORKSPACE_DIR/coppeliasim/AeroGrid_Dubai_SkyDome.ttt"
+fi
+
 echo "[AeroGrid] CoppeliaSim found at: $COPPELIA_DIR"
 echo "[AeroGrid] ROS 2 Humble environment loaded."
-echo "[AeroGrid] Starting CoppeliaSim..."
 cd "$COPPELIA_DIR"
-exec ./coppeliaSim.sh "$@"
+
+if [ $# -eq 0 ] && [ -f "$DEFAULT_SCENE" ]; then
+    echo "[AeroGrid] Loading default multi-drone scene: $DEFAULT_SCENE"
+    exec ./coppeliaSim.sh "$DEFAULT_SCENE"
+else
+    exec ./coppeliaSim.sh "$@"
+fi
