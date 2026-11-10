@@ -23,6 +23,15 @@ fi
 export PYTHONPATH="$SCRIPT_DIR/py_packages:$SCRIPT_DIR:$SCRIPT_DIR/AeroGrid:$PYTHONPATH"
 export HF_HUB_OFFLINE=1
 
-# 4. Launch unified AeroGrid stack with PyQt5 Mission Control GUI
+# 4. Auto-detect X11 Display if unset
+if [ -z "$DISPLAY" ]; then
+    if [ -S "/tmp/.X11-unix/X1" ]; then
+        export DISPLAY=:1
+    elif [ -S "/tmp/.X11-unix/X0" ]; then
+        export DISPLAY=:0
+    fi
+fi
+
+# 5. Launch unified AeroGrid stack with PyQt5 Mission Control GUI & Web HUD
 exec python3 "$SCRIPT_DIR/launch_aerogrid.py" "$@"
 

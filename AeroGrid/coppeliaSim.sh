@@ -9,6 +9,15 @@ if [ -f "/opt/ros/humble/setup.bash" ]; then
     source /opt/ros/humble/setup.bash
 fi
 
+# Auto-detect X11 Display if unset
+if [ -z "$DISPLAY" ]; then
+    if [ -S "/tmp/.X11-unix/X1" ]; then
+        export DISPLAY=:1
+    elif [ -S "/tmp/.X11-unix/X0" ]; then
+        export DISPLAY=:0
+    fi
+fi
+
 # 2. Source AeroGrid ROS 2 workspace
 WORKSPACE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [ -f "$WORKSPACE_DIR/install/setup.bash" ]; then

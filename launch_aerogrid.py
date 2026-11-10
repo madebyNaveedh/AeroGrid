@@ -146,6 +146,14 @@ def main():
     print("  AEROGRID UTM - UNIFIED MULTI-AGENT LAUNCHER (ITU AI FOR GOOD)")
     print("=" * 80)
 
+    # Auto-detect active X11 display if unset
+    if not os.environ.get("DISPLAY"):
+        for cand in [":1", ":0"]:
+            if os.path.exists(f"/tmp/.X11-unix/X{cand[1:]}"):
+                os.environ["DISPLAY"] = cand
+                logger.info("Auto-detected active X11 display: %s", cand)
+                break
+
     # 1. Check or start CoppeliaSim
     check_and_start_coppelia(auto_start_sim=args.coppelia)
 
@@ -156,17 +164,32 @@ def main():
     if not args.no_ros:
         start_ros2_publisher_thread()
 
+    print("\n" + "=" * 80)
+    print("  AEROGRID MISSION CONTROL HUD - ACCESS CHANNELS:")
+    print("  * WEB GLASS COCKPIT HUD: http://localhost:8080  (or http://127.0.0.1:8080)")
+    print(f"  * NATIVE DESKTOP HUD:    Active on Display {os.environ.get('DISPLAY', 'None')}")
+    print("=" * 80 + "\n")
+
     # 4. Launch PyQt5 Tactical Mission Control Dashboard
-    logger.info("Launching Native PyQt5 Tactical Mission Control Dashboard...")
-    from PyQt5.QtWidgets import QApplication
-    from AeroGrid.frontend.gui_dashboard import AeroGridTacticalHUD
+    try:
+        logger.info("Launching Native PyQt5 Tactical Mission Control Dashboard on %s...", os.environ.get("DISPLAY"))
+        from PyQt5.QtWidgets import QApplication
+        from AeroGrid.frontend.gui_dashboard import AeroGridTacticalHUD
 
-    app = QApplication.instance() or QApplication(sys.argv)
-    hud = AeroGridTacticalHUD()
-    hud.show()
+        app = QApplication.instance() or QApplication(sys.argv)
+        hud = AeroGridTacticalHUD()
+        hud.show()
 
-    logger.info("AeroGrid Tactical Mission Control is live!")
-    sys.exit(app.exec_())
+        logger.info("AeroGrid Tactical Mission Control is live!")
+        sys.exit(app.exec_())
+    except Exception as e:
+        logger.warning("Could not launch native desktop GUI window (%s).", e)
+        logger.info("Serving Web Mission Control HUD in foreground at http://localhost:8080")
+        try:
+            while True:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            pass
 
 
 if __name__ == "__main__":
