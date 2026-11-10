@@ -64,7 +64,7 @@ from backend.simulation.coppelia_zmq_bridge import CoppeliaZMQBridge
 # Tactical Airspace Radar Map (Glass Cockpit)
 # ==============================================================================
 class GlassCockpitRadar(QWidget):
-    """30 FPS Tactical Airspace Radar matching the AeroGrid HUD aesthetic."""
+    """30 FPS Tactical Airspace Radar matching the AeroGrid HUD aesthetic with dual-drone fleet support."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -73,6 +73,8 @@ class GlassCockpitRadar(QWidget):
 
         self.sweep_angle = 0.0
         self.active_scenario = 0
+        self.drone1_pos = {"x": 0.0, "y": 0.0, "z": 2.0}
+        self.drone2_pos = {"x": 1.2, "y": 0.6, "z": 2.6}
         self.drone_pos = {"x": 0.0, "y": 0.0, "z": 2.0}
 
         self.anim_timer = QTimer(self)
@@ -85,6 +87,19 @@ class GlassCockpitRadar(QWidget):
 
     def update_drone_pos(self, pos: dict):
         self.drone_pos = pos
+        self.drone1_pos = pos
+        self.update()
+
+    def update_fleet_telemetry(self, telem: dict):
+        if "drone1" in telem:
+            self.drone1_pos = telem["drone1"]
+            self.drone_pos = telem["drone1"]
+        elif "x" in telem:
+            self.drone1_pos = telem
+            self.drone_pos = telem
+
+        if "drone2" in telem:
+            self.drone2_pos = telem["drone2"]
         self.update()
 
     def _tick(self):
@@ -141,25 +156,8 @@ class GlassCockpitRadar(QWidget):
         p.setPen(QPen(QColor("#48bb78")))
         p.drawText(int(vp_x + 10), int(vp_y + 4), "Vertiport Pad 1")
 
-        # Scenario 1: HEMS Air Ambulance Incursion
-        if self.active_scenario == 1:
-            hx = cx + 80
-            hy = cy - 70
-            # Red Intruder Marker
-            p.setPen(Qt.NoPen)
-            p.setBrush(QBrush(QColor("#f56565")))
-            p.drawEllipse(QPointF(hx, hy), 6, 6)
-            # Distance Vector Line to Drone
-            dash_red = QPen(QColor(245, 101, 101, 150), 1.2, Qt.DashLine)
-            p.setPen(dash_red)
-            p.drawLine(QPointF(cx, cy), QPointF(hx, hy))
-            # Label
-            p.setFont(QFont("Sans-Serif", 8, QFont.Bold))
-            p.setPen(QPen(QColor("#f56565")))
-            p.drawText(int(hx + 10), int(hy + 4), "HEMS Air Ambulance (Manned) [820m]")
-
         # Scenario 2: 5G Shadow Zone
-        elif self.active_scenario == 2:
+        if self.active_scenario == 2:
             sh_x, sh_y = cx + 40, cy - 40
             p.setPen(QPen(QColor("#4299e1"), 1, Qt.DashLine))
             p.setBrush(QBrush(QColor(66, 153, 225, 25)))
@@ -168,19 +166,68 @@ class GlassCockpitRadar(QWidget):
             p.setPen(QPen(QColor("#4299e1")))
             p.drawText(int(sh_x + 6), int(sh_y + 14), "5G CELL SHADOW")
 
-        # Center Drone Marker: UAS (Our Flight)
-        dx, dy = cx, cy
+        # ----------------------------------------------------------------------
+        # Fleet Drone 1: Primary Flight (UAS_CARGO_DXB_104)
+        # ----------------------------------------------------------------------
+        d1_x = cx + float(self.drone1_pos.get("x", 0.0)) * 40.0
+        d1_y = cy - float(self.drone1_pos.get("y", 0.0)) * 40.0
+        d1_z = float(self.drone1_pos.get("z", 2.0))
+
         p.setPen(Qt.NoPen)
         p.setBrush(QBrush(QColor("#00f2fe")))
-        p.drawEllipse(QPointF(dx, dy), 5, 5)
+        p.drawEllipse(QPointF(d1_x, d1_y), 5, 5)
 
         p.setPen(QPen(QColor(0, 242, 254, 120), 1.8))
         p.setBrush(Qt.NoBrush)
-        p.drawEllipse(QPointF(dx, dy), 12, 12)
+        p.drawEllipse(QPointF(d1_x, d1_y), 12, 12)
 
         p.setFont(QFont("Sans-Serif", 8, QFont.Bold))
         p.setPen(QPen(QColor("#00f2fe")))
-        p.drawText(int(dx + 16), int(dy + 4), f"UAS (Our Flight) [{self.drone_pos.get('z', 2.0):.2f}m]")
+        if d1_z <= 0.15:
+            p.drawText(int(d1_x + 16), int(d1_y + 4), f"UAS-104 [GROUNDED - YIELDING] ({d1_z:.2f}m)")
+        else:
+            p.drawText(int(d1_x + 16), int(d1_y + 4), f"UAS-104 (Our Flight) [{d1_z:.2f}m]")
+
+        # ----------------------------------------------------------------------
+        # Fleet Drone 2: HEMS Manned Incursion / Peer Commercial UAS
+        # ----------------------------------------------------------------------
+        d2_x = cx + float(self.drone2_pos.get("x", 1.2)) * 40.0
+        d2_y = cy - float(self.drone2_pos.get("y", 0.6)) * 40.0
+        d2_z = float(self.drone2_pos.get("z", 2.6))
+
+        if self.active_scenario == 1:
+            # Red Manned Intruder Marker
+            p.setPen(Qt.NoPen)
+            p.setBrush(QBrush(QColor("#f56565")))
+            p.drawEllipse(QPointF(d2_x, d2_y), 6, 6)
+
+            p.setPen(QPen(QColor(245, 101, 101, 150), 1.8))
+            p.setBrush(Qt.NoBrush)
+            p.drawEllipse(QPointF(d2_x, d2_y), 14, 14)
+
+            # Proximity separation vector between Drone 1 and HEMS
+            dash_red = QPen(QColor(245, 101, 101, 160), 1.2, Qt.DashLine)
+            p.setPen(dash_red)
+            p.drawLine(QPointF(d1_x, d1_y), QPointF(d2_x, d2_y))
+
+            # Label
+            p.setFont(QFont("Sans-Serif", 8, QFont.Bold))
+            p.setPen(QPen(QColor("#f56565")))
+            p.drawText(int(d2_x + 16), int(d2_y + 4), f"HEMS Air Ambulance (Manned) [{d2_z:.2f}m]")
+        else:
+            # Amber Peer Fleet Marker
+            p.setPen(Qt.NoPen)
+            p.setBrush(QBrush(QColor("#ed8936")))
+            p.drawEllipse(QPointF(d2_x, d2_y), 5, 5)
+
+            p.setPen(QPen(QColor(237, 137, 54, 120), 1.5))
+            p.setBrush(Qt.NoBrush)
+            p.drawEllipse(QPointF(d2_x, d2_y), 12, 12)
+
+            # Label
+            p.setFont(QFont("Sans-Serif", 8, QFont.Bold))
+            p.setPen(QPen(QColor("#ed8936")))
+            p.drawText(int(d2_x + 16), int(d2_y + 4), f"UAS-209 (Peer Fleet) [{d2_z:.2f}m]")
 
         # Radar Sweep Beam
         rad = math.radians(self.sweep_angle)
@@ -610,9 +657,12 @@ class AeroGridTacticalHUD(QMainWindow):
 
     def _poll_telemetry(self):
         telem = self.zmq_bridge.read_telemetry()
-        if telem.get("connected"):
-            pos = telem.get("position", {"x": 0.0, "y": 0.0, "z": 2.0})
-            self.radar.update_drone_pos(pos)
+        self.radar.update_fleet_telemetry(telem)
+        if telem.get("drone1"):
+            z1 = telem["drone1"].get("z", 2.0)
+            self.t_alt.findChild(QLabel, "telemVal").setText(f"{z1:.2f}m")
+            soc1 = telem["drone1"].get("battery_soc", 82.0)
+            self.t_soc.findChild(QLabel, "telemVal").setText(f"{soc1:.1f}%")
 
     def _apply_theme(self):
         self.setStyleSheet("""

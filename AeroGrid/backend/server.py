@@ -260,7 +260,13 @@ class BackendCore:
         return {
             "scenario_idx": self.active_scenario_idx,
             "connected": cop_telem.get("connected", False),
-            "position": cop_telem.get("position", {"x": 0.0, "y": 0.0, "z": 2.0}),
+            "position": {
+                "x": cop_telem.get("x", 0.0),
+                "y": cop_telem.get("y", 0.0),
+                "z": cop_telem.get("z", 2.0),
+            },
+            "drone1": cop_telem.get("drone1", {}),
+            "drone2": cop_telem.get("drone2", {}),
             "target_z": cop_telem.get("target_z", 2.0),
             "drone_id": self.last_deliberation.get("drone", "UAS_CARGO_DXB_104"),
             "audit_event_id": self.last_deliberation.get("coord", {}).get("audit_event_id", "evt_init"),

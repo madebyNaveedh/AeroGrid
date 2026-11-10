@@ -37,11 +37,22 @@ function sysCall_init()
 
     if targetObj ~= -1 then
         sim.setObjectParent(targetObj, -1, true)
-        -- Initialize target altitude to 2.0m for nominal cruise
-        local pos = sim.getObjectPosition(targetObj, -1)
-        pos[3] = 2.0
-        sim.setObjectPosition(targetObj, -1, pos)
-        sim.addLog(sim.verbosity_scriptinfos, string.format("[AeroGrid] Target dummy resolved (Handle: %d, Initial Z: %.2fm)", targetObj, pos[3]))
+        local heliAlias = ""
+        local hParent = sim.getObject('..', {noError = true})
+        if hParent ~= -1 then heliAlias = string.lower(sim.getObjectAlias(hParent)) end
+        
+        local isDrone2 = string.find(heliAlias, "peer") or string.find(heliAlias, "hems") or string.find(heliAlias, "#") or string.find(heliAlias, "1")
+        if isDrone2 then
+            sim.setObjectAlias(targetObj, "target_drone2")
+            local pos = {1.2, 0.6, 2.6}
+            sim.setObjectPosition(targetObj, -1, pos)
+            sim.addLog(sim.verbosity_scriptinfos, string.format("[AeroGrid] Drone 2 target dummy resolved (Handle: %d, Initial Pos: 1.2, 0.6, 2.6m)", targetObj))
+        else
+            sim.setObjectAlias(targetObj, "target_drone1")
+            local pos = {0.0, 0.0, 2.0}
+            sim.setObjectPosition(targetObj, -1, pos)
+            sim.addLog(sim.verbosity_scriptinfos, string.format("[AeroGrid] Drone 1 target dummy resolved (Handle: %d, Initial Z: %.2fm)", targetObj, pos[3]))
+        end
     else
         sim.addLog(sim.verbosity_scripterrors, "[AeroGrid] WARNING: Could not find target dummy! Creating virtual target.")
         targetObj = sim.createDummy(0.05)
@@ -218,6 +229,26 @@ function utm_command_callback(msg)
     if targetObj == -1 then return end
     local pos = sim.getObjectPosition(targetObj, -1)
 
+    local heliAlias = ""
+    local hParent = sim.getObject('..', {noError = true})
+    if hParent ~= -1 then heliAlias = string.lower(sim.getObjectAlias(hParent)) end
+    local isDrone2 = string.find(heliAlias, "peer") or string.find(heliAlias, "hems") or string.find(heliAlias, "#") or string.find(heliAlias, "1")
+
+    -- Drone 2 (HEMS / Peer Fleet) Maneuvers:
+    if isDrone2 then
+        if string.find(payload, "EMERGENCY_DESCENT") or string.find(payload, "EVACUATION") then
+            -- Manned HEMS sweeps across corridor overhead
+            sim.setObjectPosition(targetObj, -1, {-1.2, -0.8, 2.8})
+            sim.addLog(sim.verbosity_scriptinfos, "[AeroGrid] Action: HEMS OVERFLIGHT -> Cruising across corridor at 2.8m")
+        elseif string.find(payload, "DIVERT") or string.find(payload, "VERTIPORT") then
+            sim.setObjectPosition(targetObj, -1, {0.6, -0.4, 2.2})
+        else
+            sim.setObjectPosition(targetObj, -1, {1.2, 0.6, 2.6})
+        end
+        return
+    end
+
+    -- Drone 1 (Primary UAS Cargo) Maneuvers:
     -- Case 1: HEMS Emergency Evacuation
     if string.find(payload, "EMERGENCY_DESCENT_AND_CORRIDOR_EVACUATION") or string.find(payload, "EVACUATION") then
         pos[3] = 0.05
@@ -226,14 +257,14 @@ function utm_command_callback(msg)
 
     -- Case 2: 5G Shadowing Handover
     elseif string.find(payload, "DESCEND_30M_AND_INITIATE_5G_CELL_HANDOVER") or string.find(payload, "5G_CELL_HANDOVER") then
-        pos[3] = math.max(0.05, pos[3] - 0.5)
+        pos[3] = 1.50
         sim.setObjectPosition(targetObj, -1, pos)
         sim.addLog(sim.verbosity_scriptinfos, string.format("[AeroGrid] Action: 5G HANDOVER -> Altitude adjusted to %.2fm", pos[3]))
 
     -- Case 3: Battery Divert to Vertiport 1
     elseif string.find(payload, "DIVERT") or string.find(payload, "VERTIPORT") then
-        sim.setObjectPosition(targetObj, -1, {-2.0, 1.5, 0.8})
-        sim.addLog(sim.verbosity_scriptinfos, "[AeroGrid] Action: BATTERY DIVERT -> Heading to Vertiport Pad 1 (-2.0, 1.5, 0.8)")
+        sim.setObjectPosition(targetObj, -1, {-1.8, 1.2, 0.8})
+        sim.addLog(sim.verbosity_scriptinfos, "[AeroGrid] Action: BATTERY DIVERT -> Heading to Vertiport Pad 1 (-1.8, 1.2, 0.8)")
 
     -- Case 4: Nominal Cruise
     elseif string.find(payload, "MAINTAIN_ASSIGNED_AIRSPACE_CORRIDOR") or string.find(payload, "NOMINAL") then

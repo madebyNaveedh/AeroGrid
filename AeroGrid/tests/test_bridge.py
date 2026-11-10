@@ -111,6 +111,79 @@ class TestBridgeDatabaseLogic(unittest.TestCase):
             self.assertEqual(parsed["recommended_action"], "EMERGENCY_DIVERT")
 
 
+class TestCoppeliaZMQBridge(unittest.TestCase):
+    """Validates multi-drone fleet coordination, realistic aerodynamic velocity limiting, and telemetry."""
+
+    def setUp(self) -> None:
+        from backend.simulation.coppelia_zmq_bridge import CoppeliaZMQBridge
+        self.bridge = CoppeliaZMQBridge()
+
+    def tearDown(self) -> None:
+        self.bridge._stop_flight_loop = True
+
+    def test_bridge_fleet_initialization(self) -> None:
+        """Verify both Drone 1 and Drone 2 are properly initialized."""
+        self.assertIn("drone1", self.bridge.__dict__)
+        self.assertIn("drone2", self.bridge.__dict__)
+        self.assertEqual(self.bridge.drone1["id"], "UAS_CARGO_DXB_104")
+        self.assertEqual(self.bridge.drone1["goal_pos"], [0.0, 0.0, 2.0])
+        self.assertEqual(self.bridge.drone2["goal_pos"], [1.2, 0.6, 2.6])
+
+    def test_realistic_velocity_limiting(self) -> None:
+        """Verify vertical and horizontal steps never exceed aerodynamic speed bounds."""
+        # Drone 1 commanded to ground landing (2.0m -> 0.05m = delta 1.95m)
+        self.bridge.drone1["current_pos"] = [0.0, 0.0, 2.0]
+        self.bridge.drone1["goal_pos"] = [0.0, 0.0, 0.05]
+
+        dt = 0.033  # ~30 Hz step
+        self.bridge._step_smooth_flight(dt)
+
+        # In a single 33ms step, change in Z should be at most MAX_VERT_SPEED * dt = 0.90 * 0.033 = 0.030m
+        expected_max_step = self.bridge.MAX_VERT_SPEED * dt + 0.001
+        actual_step = 2.0 - self.bridge.drone1["current_pos"][2]
+        self.assertLessEqual(actual_step, expected_max_step)
+        self.assertGreater(self.bridge.drone1["current_pos"][2], 1.90, "Drone must NOT jump directly to 0.05m")
+
+    def test_multi_drone_scenario_actuation(self) -> None:
+        """Verify all 4 scenario directives properly command both drones."""
+        # 1. Scenario 1: HEMS Manned Incursion
+        res1 = self.bridge.execute_utm_action("EMERGENCY_DESCENT_AND_CORRIDOR_EVACUATION")
+        self.assertTrue(res1["actuated"])
+        self.assertEqual(self.bridge.drone1["goal_pos"], [0.0, 0.0, 0.05])
+        self.assertEqual(self.bridge.drone2["goal_pos"], [-1.2, -0.8, 2.8])
+        self.assertEqual(self.bridge.drone2["id"], "HEMS_AIR_AMBULANCE")
+
+        # 2. Scenario 2: 5G Shadowing Handover
+        res2 = self.bridge.execute_utm_action("DESCEND_30M_AND_INITIATE_5G_CELL_HANDOVER")
+        self.assertTrue(res2["actuated"])
+        self.assertEqual(self.bridge.drone1["goal_pos"], [0.0, 0.0, 1.50])
+        self.assertEqual(self.bridge.drone2["goal_pos"], [1.2, 0.6, 2.60])
+
+        # 3. Scenario 3: Battery Divert
+        res3 = self.bridge.execute_utm_action("EMERGENCY_DIVERT_TO_NEAREST_VERTIPORT")
+        self.assertTrue(res3["actuated"])
+        self.assertEqual(self.bridge.drone1["goal_pos"], [-1.8, 1.2, 0.80])
+        self.assertEqual(self.bridge.drone2["goal_pos"], [0.6, -0.4, 2.20])
+
+        # 4. Scenario 0: Nominal Cruise Reset
+        res0 = self.bridge.execute_utm_action("MAINTAIN_ASSIGNED_AIRSPACE_CORRIDOR")
+        self.assertTrue(res0["actuated"])
+        self.assertEqual(self.bridge.drone1["goal_pos"], [0.0, 0.0, 2.00])
+        self.assertEqual(self.bridge.drone2["goal_pos"], [1.2, 0.6, 2.60])
+
+    def test_telemetry_payload_fleet_structure(self) -> None:
+        """Verify read_telemetry returns full multi-drone fleet telemetry."""
+        telem = self.bridge.read_telemetry()
+        self.assertIn("drone1", telem)
+        self.assertIn("drone2", telem)
+        self.assertIn("x", telem["drone1"])
+        self.assertIn("z", telem["drone1"])
+        self.assertIn("battery_soc", telem["drone1"])
+        self.assertIn("x", telem["drone2"])
+        self.assertIn("z", telem["drone2"])
+        self.assertEqual(telem["drone1"]["id"], "UAS_CARGO_DXB_104")
+
+
 if __name__ == "__main__":
     unittest.main()
 
